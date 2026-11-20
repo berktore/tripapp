@@ -1,3 +1,4 @@
+
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,7 +18,9 @@ class TripStorage {
       final decoded = jsonDecode(data) as List<dynamic>;
       return decoded
           .map(
-            (item) => TripPlan.fromJson(Map<String, dynamic>.from(item as Map)),
+            (item) => TripPlan.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
           )
           .toList();
     } catch (_) {
@@ -27,28 +30,35 @@ class TripStorage {
 
   static Future<void> _writeTrips(List<TripPlan> trips) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+
+    final success = await prefs.setString(
       _storageKey,
       jsonEncode(trips.map((trip) => trip.toJson()).toList()),
     );
+
+    if (!success) {
+      throw Exception('Gezi planı cihaz hafızasına kaydedilemedi.');
+    }
   }
 
   static Future<void> saveTrip(TripPlan trip) async {
     final trips = await getTrips();
+
     trips.removeWhere((item) => item.id == trip.id);
     trips.insert(0, trip);
+
     await _writeTrips(trips);
   }
 
-  /// Adds a map place to the first saved trip matching [destination].
-  /// Returns false when the user has not created a matching trip yet.
-  /// Returns true when added, false when already present or no trip exists.
+  /// Adds a place to the first saved trip matching [destination].
+  /// Returns false if no matching trip exists or the place is already saved.
   static Future<bool> addStopToDestination({
     required String destination,
     required ItineraryStop stop,
   }) async {
     final trips = await getTrips();
     final normalizedDestination = _normalize(destination);
+
     final tripIndex = trips.indexWhere(
       (trip) => _normalize(trip.destination) == normalizedDestination,
     );
@@ -58,24 +68,29 @@ class TripStorage {
     final trip = trips[tripIndex];
     final days = List<ItineraryDay>.from(trip.itinerary);
 
-    for (final day in days) {
-      if (day.stops.any(
-        (existing) => _normalize(existing.title) == _normalize(stop.title),
-      )) {
-        return false;
-      }
-    }
+    final alreadyExists = days.any(
+      (day) => day.stops.any(
+        (existing) =>
+            existing.osmId != null &&
+            stop.osmId != null &&
+            existing.osmId == stop.osmId ||
+            _normalize(existing.title) == _normalize(stop.title),
+      ),
+    );
+
+    if (alreadyExists) return false;
 
     if (days.isEmpty) {
       days.add(
         ItineraryDay(
           dayNumber: 1,
-          title: 'Antalya keşif rotası',
+          title: '${trip.destination} keşif rotası',
           stops: [stop],
         ),
       );
     } else {
       final firstDay = days.first;
+
       days[0] = ItineraryDay(
         dayNumber: firstDay.dayNumber,
         title: firstDay.title,
@@ -100,12 +115,18 @@ class TripStorage {
     return true;
   }
 
-  static String _normalize(String value) =>
-      value.trim().toLowerCase().replaceAll('ı', 'i');
+  static String _normalize(String value) {
+    return value
+        .trim()
+        .toLowerCase()
+        .replaceAll('ı', 'i');
+  }
 
   static Future<void> deleteTrip(String id) async {
     final trips = await getTrips();
+
     trips.removeWhere((trip) => trip.id == id);
+
     await _writeTrips(trips);
   }
 }

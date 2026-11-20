@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,6 +10,7 @@ import '../services/trip_storage.dart';
 import '../services/destination_image_service.dart';
 import '../services/destination_places_service.dart';
 import '../theme/app_theme.dart';
+import 'plans_screen.dart';
 
 class PlannerScreen extends StatefulWidget {
   final String? initialDestination;
@@ -94,6 +96,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
     suggestions = popularPlaces;
 
     final initialDestination = widget.initialDestination?.trim();
+
     if (initialDestination != null && initialDestination.isNotEmpty) {
       selectedPlace = initialDestination;
       destinationController.text = initialDestination;
@@ -134,14 +137,20 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
   Future<void> fetchPlaces(String query) async {
     try {
-      final uri = Uri.https('geocoding-api.open-meteo.com', '/v1/search', {
-        'name': query,
-        'count': '8',
-        'language': 'tr',
-        'format': 'json',
-      });
+      final uri = Uri.https(
+        'geocoding-api.open-meteo.com',
+        '/v1/search',
+        {
+          'name': query,
+          'count': '8',
+          'language': 'tr',
+          'format': 'json',
+        },
+      );
 
-      final response = await http.get(uri).timeout(const Duration(seconds: 10));
+      final response = await http
+          .get(uri)
+          .timeout(const Duration(seconds: 10));
 
       if (response.statusCode != 200) {
         throw Exception('Destinasyon aranamadı.');
@@ -159,25 +168,35 @@ class _PlannerScreenState extends State<PlannerScreen> {
               'country': [
                 place['admin1'],
                 place['country'],
-              ].where((e) => e != null && e.toString().isNotEmpty).join(', '),
+              ]
+                  .where(
+                    (e) => e != null && e.toString().isNotEmpty,
+                  )
+                  .join(', '),
               'image': '',
             };
           })
           .where((place) => place['name']!.isNotEmpty)
           .toList();
 
-      if (!mounted || destinationController.text.trim() != query) return;
+      if (!mounted || destinationController.text.trim() != query) {
+        return;
+      }
 
       setState(() {
         suggestions = places;
         loading = false;
       });
     } catch (_) {
-      if (!mounted || destinationController.text.trim() != query) return;
+      if (!mounted || destinationController.text.trim() != query) {
+        return;
+      }
 
       setState(() {
         suggestions = popularPlaces.where((place) {
-          return place['name']!.toLowerCase().contains(query.toLowerCase());
+          return place['name']!
+              .toLowerCase()
+              .contains(query.toLowerCase());
         }).toList();
 
         loading = false;
@@ -236,6 +255,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
   int get tripDays {
     if (travelDates == null) return 0;
+
     return travelDates!.end.difference(travelDates!.start).inDays + 1;
   }
 
@@ -245,7 +265,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
       prefixIcon: Icon(icon, color: AppTheme.navy),
       filled: true,
       fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: 18,
+        vertical: 18,
+      ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(17),
         borderSide: BorderSide.none,
@@ -253,7 +276,11 @@ class _PlannerScreenState extends State<PlannerScreen> {
     );
   }
 
-  Widget sectionTitle(String title, String subtitle, IconData icon) {
+  Widget sectionTitle(
+    String title,
+    String subtitle,
+    IconData icon,
+  ) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 13),
       child: Row(
@@ -283,7 +310,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
                 const SizedBox(height: 3),
                 Text(
                   subtitle,
-                  style: const TextStyle(fontSize: 12, color: AppTheme.muted),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.muted,
+                  ),
                 ),
               ],
             ),
@@ -320,14 +350,18 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
     if (travelDates == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lütfen seyahat tarihlerini seç.')),
+        const SnackBar(
+          content: Text('Lütfen seyahat tarihlerini seç.'),
+        ),
       );
       return;
     }
 
     if (selectedStyles.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('En az bir tatil tarzı seçmelisin.')),
+        const SnackBar(
+          content: Text('En az bir tatil tarzı seçmelisin.'),
+        ),
       );
       return;
     }
@@ -345,10 +379,13 @@ class _PlannerScreenState extends State<PlannerScreen> {
         destination: selectedPlace!,
         dayCount: travelDates!.end.difference(travelDates!.start).inDays + 1,
         styles: selectedStyles.toList(),
+        budget: budget,
       );
 
       if (itinerary.every((day) => day.stops.isEmpty)) {
-        throw Exception('Bu destinasyon için yeterli gezi noktası bulunamadı.');
+        throw Exception(
+          'Bu destinasyon için yeterli gezi noktası bulunamadı.',
+        );
       }
 
       final trip = TripPlan(
@@ -396,16 +433,25 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
       if (!mounted) return;
 
+      // Liste ekranına uğramadan doğrudan yeni planın detayını aç.
       if (goToPlans == true) {
-        Navigator.pop(context, true);
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => TripDetailScreen(trip: trip),
+          ),
+        );
       }
     } catch (error) {
       if (!mounted) return;
 
       setState(() => loading = false);
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Gezi kaydedilemedi: $error')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Gezi kaydedilemedi: $error'),
+        ),
+      );
     }
   }
 
@@ -419,7 +465,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
         centerTitle: false,
         title: const Text(
           'Gezi planla',
-          style: TextStyle(color: AppTheme.navy, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: AppTheme.navy,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         leading: IconButton(
           onPressed: () => Navigator.pop(context),
@@ -444,7 +493,11 @@ class _PlannerScreenState extends State<PlannerScreen> {
           const SizedBox(height: 8),
           const Text(
             'Tercihlerini belirle, sana özel bir yolculuk hazırlayalım.',
-            style: TextStyle(color: AppTheme.muted, fontSize: 14, height: 1.5),
+            style: TextStyle(
+              color: AppTheme.muted,
+              fontSize: 14,
+              height: 1.5,
+            ),
           ),
           const SizedBox(height: 25),
 
@@ -461,23 +514,22 @@ class _PlannerScreenState extends State<PlannerScreen> {
                   controller: destinationController,
                   focusNode: focusNode,
                   onChanged: searchPlaces,
-                  decoration:
-                      fieldDecoration(
-                        'Şehir veya ülke ara...',
-                        Icons.search_rounded,
-                      ).copyWith(
-                        suffixIcon: loading
-                            ? const Padding(
-                                padding: EdgeInsets.all(14),
-                                child: SizedBox(
-                                  width: 19,
-                                  height: 19,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                              )
-                            : destinationController.text.isNotEmpty
+                  decoration: fieldDecoration(
+                    'Şehir veya ülke ara...',
+                    Icons.search_rounded,
+                  ).copyWith(
+                    suffixIcon: loading
+                        ? const Padding(
+                            padding: EdgeInsets.all(14),
+                            child: SizedBox(
+                              width: 19,
+                              height: 19,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
+                            ),
+                          )
+                        : destinationController.text.isNotEmpty
                             ? IconButton(
                                 onPressed: () {
                                   destinationController.clear();
@@ -486,7 +538,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                                 icon: const Icon(Icons.close),
                               )
                             : null,
-                      ),
+                  ),
                 ),
                 if (selectedPlace != null) ...[
                   const SizedBox(height: 12),
@@ -498,7 +550,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.check_circle, color: AppTheme.teal),
+                        const Icon(
+                          Icons.check_circle,
+                          color: AppTheme.teal,
+                        ),
                         const SizedBox(width: 9),
                         Expanded(
                           child: Text(
@@ -517,6 +572,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                               suggestions = popularPlaces;
                               showSuggestions = true;
                             });
+
                             focusNode.requestFocus();
                           },
                           child: const Text('Değiştir'),
@@ -543,7 +599,8 @@ class _PlannerScreenState extends State<PlannerScreen> {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: suggestions.length,
-                        separatorBuilder: (_, _) => const SizedBox(width: 12),
+                        separatorBuilder: (_, _) =>
+                            const SizedBox(width: 12),
                         itemBuilder: (context, index) {
                           final place = suggestions[index];
 
@@ -723,19 +780,21 @@ class _PlannerScreenState extends State<PlannerScreen> {
                 'Seyahat grubu',
                 Icons.people_outline,
               ),
-              items:
-                  const [
-                    'Tek başıma',
-                    '2 kişi',
-                    '3 kişi',
-                    '4 kişi',
-                    '5 kişi',
-                    '6 kişi',
-                    'Aile',
-                    'Arkadaşlarla',
-                  ].map((item) {
-                    return DropdownMenuItem(value: item, child: Text(item));
-                  }).toList(),
+              items: const [
+                'Tek başıma',
+                '2 kişi',
+                '3 kişi',
+                '4 kişi',
+                '5 kişi',
+                '6 kişi',
+                'Aile',
+                'Arkadaşlarla',
+              ].map((item) {
+                return DropdownMenuItem(
+                  value: item,
+                  child: Text(item),
+                );
+              }).toList(),
               onChanged: (value) {
                 if (value != null) {
                   setState(() => travelers = value);
@@ -770,7 +829,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
                     fontWeight: FontWeight.w600,
                   ),
                   side: BorderSide(
-                    color: selected ? AppTheme.teal : const Color(0xFFE7ECEB),
+                    color: selected
+                        ? AppTheme.teal
+                        : const Color(0xFFE7ECEB),
                   ),
                 );
               }).toList(),
@@ -810,7 +871,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
                     fontWeight: FontWeight.w600,
                   ),
                   side: BorderSide(
-                    color: selected ? AppTheme.teal : const Color(0xFFE7ECEB),
+                    color: selected
+                        ? AppTheme.teal
+                        : const Color(0xFFE7ECEB),
                   ),
                 );
               }).toList(),
@@ -825,7 +888,8 @@ class _PlannerScreenState extends State<PlannerScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.teal,
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: AppTheme.teal.withValues(alpha: 0.5),
+                disabledBackgroundColor:
+                    AppTheme.teal.withValues(alpha: 0.5),
                 elevation: 0,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(17),
@@ -856,7 +920,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Icon(Icons.arrow_forward_rounded, size: 19),
+                  const Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 19,
+                  ),
                 ],
               ),
             ),
@@ -866,7 +933,10 @@ class _PlannerScreenState extends State<PlannerScreen> {
           const Center(
             child: Text(
               'Seyahatini birlikte güzelleştirelim.',
-              style: TextStyle(color: AppTheme.muted, fontSize: 12),
+              style: TextStyle(
+                color: AppTheme.muted,
+                fontSize: 12,
+              ),
             ),
           ),
         ],

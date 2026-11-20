@@ -1,9 +1,11 @@
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
 import '../models/trip_plan.dart';
+import 'itinerary_distribution_service.dart';
+import 'place_filter_service.dart';
+import 'place_scoring_service.dart';
 
 class DestinationPlacesService {
   static const String _userAgent = 'TripApp/1.0';
@@ -11,6 +13,7 @@ class DestinationPlacesService {
   static const List<String> _servers = [
     'overpass-api.de',
     'overpass.kumi.systems',
+    'overpass.private.coffee',
   ];
 
   static const List<String> _times = [
@@ -21,162 +24,474 @@ class DestinationPlacesService {
     '17:00',
   ];
 
+  static const int _searchRadiusMeters = 25000;
+  static const double _maxDistanceKm = 25;
+
+  final PlaceFilterService _filterService = const PlaceFilterService();
+  final PlaceScoringService _scoringService = const PlaceScoringService();
+  final ItineraryDistributionService _distributionService =
+      const ItineraryDistributionService();
+
+  static const Map<String, String> _destinationCountries = {
+    'kapadokya': 'tr',
+    'cappadocia': 'tr',
+    'istanbul': 'tr',
+    'antalya': 'tr',
+    'ankara': 'tr',
+    'izmir': 'tr',
+    'bodrum': 'tr',
+    'nevsehir': 'tr',
+    'goreme': 'tr',
+    'santorini': 'gr',
+    'atina': 'gr',
+    'athens': 'gr',
+    'mykonos': 'gr',
+    'rhodes': 'gr',
+    'kyoto': 'jp',
+    'tokyo': 'jp',
+    'osaka': 'jp',
+    'nara': 'jp',
+    'roma': 'it',
+    'rome': 'it',
+    'venedik': 'it',
+    'venice': 'it',
+    'floransa': 'it',
+    'florence': 'it',
+    'milano': 'it',
+    'milan': 'it',
+    'paris': 'fr',
+    'nice': 'fr',
+    'lyon': 'fr',
+    'londra': 'gb',
+    'london': 'gb',
+    'edinburgh': 'gb',
+    'berlin': 'de',
+    'munih': 'de',
+    'munich': 'de',
+    'hamburg': 'de',
+    'barcelona': 'es',
+    'madrid': 'es',
+    'seville': 'es',
+    'sevilla': 'es',
+    'amsterdam': 'nl',
+    'rotterdam': 'nl',
+    'zurich': 'ch',
+    'geneva': 'ch',
+    'cologne': 'de',
+    'prague': 'cz',
+    'budapest': 'hu',
+    'vienna': 'at',
+    'wien': 'at',
+    'new york': 'us',
+    'los angeles': 'us',
+    'san francisco': 'us',
+    'las vegas': 'us',
+    'miami': 'us',
+    'chicago': 'us',
+    'toronto': 'ca',
+    'vancouver': 'ca',
+    'bali': 'id',
+    'jakarta': 'id',
+    'dubai': 'ae',
+    'abu dhabi': 'ae',
+    'bangkok': 'th',
+    'phuket': 'th',
+    'singapore': 'sg',
+    'seoul': 'kr',
+    'busan': 'kr',
+    'sydney': 'au',
+    'melbourne': 'au',
+    'cairo': 'eg',
+    'marrakech': 'ma',
+    'cape town': 'za',
+    'lisbon': 'pt',
+    'porto': 'pt',
+    'brussels': 'be',
+    'bruges': 'be',
+    'copenhagen': 'dk',
+    'stockholm': 'se',
+    'oslo': 'no',
+    'helsinki': 'fi',
+    'moscow': 'ru',
+    'st petersburg': 'ru',
+  };
+
+  static const Map<String, String> _countryNames = {
+    'tr': 'Türkiye',
+    'gr': 'Yunanistan',
+    'jp': 'Japonya',
+    'it': 'İtalya',
+    'fr': 'Fransa',
+    'gb': 'Birleşik Krallık',
+    'de': 'Almanya',
+    'es': 'İspanya',
+    'nl': 'Hollanda',
+    'ch': 'İsviçre',
+    'cz': 'Çekya',
+    'hu': 'Macaristan',
+    'at': 'Avusturya',
+    'us': 'Amerika Birleşik Devletleri',
+    'ca': 'Kanada',
+    'id': 'Endonezya',
+    'ae': 'Birleşik Arap Emirlikleri',
+    'th': 'Tayland',
+    'sg': 'Singapur',
+    'kr': 'Güney Kore',
+    'au': 'Avustralya',
+    'eg': 'Mısır',
+    'ma': 'Fas',
+    'za': 'Güney Afrika',
+    'pt': 'Portekiz',
+    'be': 'Belçika',
+    'dk': 'Danimarka',
+    'se': 'İsveç',
+    'no': 'Norveç',
+    'fi': 'Finlandiya',
+    'ru': 'Rusya',
+  };
+
+  // ------------------------------------------------------------
+  // ANA PLANLAMA
+  // ------------------------------------------------------------
+
   Future<List<ItineraryDay>> buildItinerary({
     required String destination,
     required int dayCount,
     required List<String> styles,
+    String budget = 'Orta',
   }) async {
-    if (destination.trim().isEmpty) {
+    final cleanDestination = destination.trim();
+
+    if (cleanDestination.isEmpty) {
       throw ArgumentError('Destinasyon boş olamaz.');
     }
 
-    if (dayCount < 1) {
-      throw ArgumentError('Gezi en az bir gün olmalıdır.');
+    if (dayCount < 1 || dayCount > 30) {
+      throw ArgumentError(
+        'Gezi süresi 1 ile 30 gün arasında olmalıdır.',
+      );
     }
 
-    final location = await _findLocation(destination);
+    final location = await _findLocation(cleanDestination);
     final places = await _findPlaces(location);
 
     if (places.isEmpty) {
-      throw Exception('$destination için yeterli gezi noktası bulunamadı.');
+      throw Exception(
+        '$cleanDestination çevresinde kullanılabilir gezi noktası '
+        'bulunamadı. Lütfen daha sonra tekrar dene.',
+      );
+    }
+
+    final attractions = places.where((p) => !_isFood(p)).toList();
+
+    if (attractions.isEmpty) {
+      throw Exception(
+        '$cleanDestination için yeterli turistik mekân bulunamadı.',
+      );
     }
 
     return _createDailyItinerary(
-      destination: destination,
+      destination: cleanDestination,
       places: places,
       dayCount: dayCount,
       styles: styles,
+      budget: budget,
     );
   }
 
-  Future<Map<String, dynamic>> _findLocation(String destination) async {
-    final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
-      'q': destination,
-      'format': 'jsonv2',
-      'limit': '1',
-      'addressdetails': '1',
-    });
+  // ------------------------------------------------------------
+  // NORMALİZASYON VE DESTİNASYON
+  // ------------------------------------------------------------
 
-    final response = await http
-        .get(uri, headers: {'User-Agent': _userAgent})
-        .timeout(const Duration(seconds: 20));
-
-    if (response.statusCode != 200) {
-      throw Exception('Destinasyon konumu alınamadı.');
-    }
-
-    final results = jsonDecode(response.body) as List<dynamic>;
-
-    if (results.isEmpty) {
-      throw Exception('Destinasyon haritada bulunamadı.');
-    }
-
-    return Map<String, dynamic>.from(results.first as Map);
+  String _normalize(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('ı', 'i')
+        .replaceAll('ğ', 'g')
+        .replaceAll('ü', 'u')
+        .replaceAll('ş', 's')
+        .replaceAll('ö', 'o')
+        .replaceAll('ç', 'c')
+        .replaceAll('â', 'a')
+        .replaceAll('î', 'i')
+        .replaceAll('û', 'u')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
-  Future<List<_Place>> _findPlaces(Map<String, dynamic> location) async {
-    final bounds = location['boundingbox'] as List<dynamic>?;
+  String? _getCountryCode(String destination) {
+    final normalized = _normalize(destination);
 
-    if (bounds == null || bounds.length < 4) {
-      throw Exception('Destinasyon harita sınırları bulunamadı.');
+    if (_destinationCountries.containsKey(normalized)) {
+      return _destinationCountries[normalized];
     }
 
-    final south = double.parse(bounds[0].toString());
-    final north = double.parse(bounds[1].toString());
-    final west = double.parse(bounds[2].toString());
-    final east = double.parse(bounds[3].toString());
+    final firstPart = normalized.split(',').first.trim();
+    return _destinationCountries[firstPart];
+  }
 
-    final area = '($south,$west,$north,$east)';
+  bool _isCappadocia(String destination) {
+    final value = _normalize(destination);
+    return value.contains('kapadokya') ||
+        value.contains('cappadocia');
+  }
 
-    // Önce gerçek gezi ve keşif noktalarını getir.
-    // Restoranları ayrı sorguluyoruz; böylece sonuçları dolduramazlar.
-    final attractionQuery =
-        '''
+  // ------------------------------------------------------------
+  // KONUM BULMA
+  // ------------------------------------------------------------
+
+  Future<Map<String, dynamic>> _findLocation(
+    String destination,
+  ) async {
+    final countryCode = _getCountryCode(destination);
+    final isCappadocia = _isCappadocia(destination);
+    final countryName =
+        countryCode == null ? null : _countryNames[countryCode];
+
+    final query = isCappadocia
+        ? 'Kapadokya, Nevşehir, Türkiye'
+        : countryName != null
+            ? '$destination, $countryName'
+            : destination;
+
+    final parameters = <String, String>{
+      'q': query,
+      'format': 'jsonv2',
+      'limit': '10',
+      'addressdetails': '1',
+      'accept-language': 'tr',
+    };
+
+    if (countryCode != null) {
+      parameters['countrycodes'] = countryCode;
+    }
+
+    final uri = Uri.https(
+      'nominatim.openstreetmap.org',
+      '/search',
+      parameters,
+    );
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'User-Agent': _userAgent,
+        'Accept': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 25));
+
+    if (response.statusCode != 200) {
+      throw Exception(
+        'Konum servisi yanıt vermedi: ${response.statusCode}',
+      );
+    }
+
+    final decoded = jsonDecode(response.body);
+
+    if (decoded is! List) {
+      throw Exception('Konum servisinden geçersiz veri geldi.');
+    }
+
+    final candidates = decoded
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .where((item) {
+          final lat = double.tryParse(item['lat']?.toString() ?? '');
+          final lon = double.tryParse(item['lon']?.toString() ?? '');
+          final address = item['address'];
+
+          if (lat == null || lon == null || address is! Map) {
+            return false;
+          }
+
+          if (countryCode != null) {
+            final actualCode =
+                address['country_code']?.toString().toLowerCase();
+
+            if (actualCode != countryCode) return false;
+          }
+
+          if (isCappadocia) {
+            return lat >= 37.3 &&
+                lat <= 39.5 &&
+                lon >= 33.0 &&
+                lon <= 36.5;
+          }
+
+          final displayName = _normalize(
+            item['display_name']?.toString() ?? '',
+          );
+
+          final firstPart =
+              _normalize(destination.split(',').first);
+
+          return displayName.contains(firstPart);
+        }).toList();
+
+    if (candidates.isEmpty) {
+      throw Exception(
+        '$destination için doğru ülkede konum bulunamadı.',
+      );
+    }
+
+    candidates.sort((a, b) {
+      final nameA = _normalize(a['display_name']?.toString() ?? '');
+      final nameB = _normalize(b['display_name']?.toString() ?? '');
+      final target = _normalize(destination.split(',').first);
+
+      final scoreA = nameA.startsWith(target) ? 1 : 0;
+      final scoreB = nameB.startsWith(target) ? 1 : 0;
+
+      return scoreB.compareTo(scoreA);
+    });
+
+    return candidates.first;
+  }
+
+  // ------------------------------------------------------------
+  // OVERPASS MEKÂN ARAMA
+  // ------------------------------------------------------------
+
+  Future<List<_Place>> _findPlaces(
+    Map<String, dynamic> location,
+  ) async {
+    final latitude = double.tryParse(location['lat'].toString());
+    final longitude = double.tryParse(location['lon'].toString());
+
+    if (latitude == null || longitude == null) {
+      throw Exception('Destinasyon koordinatları okunamadı.');
+    }
+
+    final area =
+        '(around:$_searchRadiusMeters,$latitude,$longitude)';
+
+    final attractionQuery = '''
+[out:json][timeout:60];
+(
+  node$area["tourism"~"attraction|museum|viewpoint|zoo|aquarium|artwork|gallery"];
+  way$area["tourism"~"attraction|museum|viewpoint|zoo|aquarium|artwork|gallery"];
+  relation$area["tourism"~"attraction|museum|viewpoint|zoo|aquarium|artwork|gallery"];
+
+  node$area["amenity"="place_of_worship"];
+  way$area["amenity"="place_of_worship"];
+  relation$area["amenity"="place_of_worship"];
+
+  node$area["historic"];
+  way$area["historic"];
+  relation$area["historic"];
+
+  node$area["leisure"~"park|garden|nature_reserve"];
+  way$area["leisure"~"park|garden|nature_reserve"];
+  relation$area["leisure"~"park|garden|nature_reserve"];
+
+  node$area["amenity"="marketplace"];
+  way$area["amenity"="marketplace"];
+
+  node$area["shop"~"mall|department_store|marketplace"];
+  way$area["shop"~"mall|department_store|marketplace"];
+
+  node$area["natural"~"beach|waterfall"];
+  way$area["natural"~"beach|waterfall"];
+
+  node$area["waterway"="waterfall"];
+  way$area["waterway"="waterfall"];
+);
+out center tags 300;
+''';
+
+    final foodQuery = '''
 [out:json][timeout:40];
 (
-  node["tourism"~"attraction|museum|viewpoint|zoo|aquarium"]$area;
-  way["tourism"~"attraction|museum|viewpoint|zoo|aquarium"]$area;
-  relation["tourism"~"attraction|museum|viewpoint|zoo|aquarium"]$area;
-
-  node["historic"~"castle|archaeological_site|monument|memorial|ruins|fort|city_gate|tomb|church|mosque|temple"]$area;
-  way["historic"~"castle|archaeological_site|monument|memorial|ruins|fort|city_gate|tomb|church|mosque|temple"]$area;
-  relation["historic"~"castle|archaeological_site|monument|memorial|ruins|fort|city_gate|tomb|church|mosque|temple"]$area;
-
-  node["leisure"="park"]$area;
-  way["leisure"="park"]$area;
-
-  node["natural"="beach"]$area;
-  way["natural"="beach"]$area;
-
-  node["waterway"="waterfall"]$area;
+  node$area["amenity"~"restaurant|cafe|food_court"];
+  way$area["amenity"~"restaurant|cafe|food_court"];
+  node$area["shop"="bakery"];
+  way$area["shop"="bakery"];
 );
 out center tags 100;
 ''';
 
-    final foodQuery =
-        '''
-[out:json][timeout:30];
-(
-  node["amenity"~"restaurant|cafe"]["name"]$area;
-  way["amenity"~"restaurant|cafe"]["name"]$area;
-);
-out center tags 40;
-''';
+    final attractions = await _queryPlaces(
+      attractionQuery,
+      centerLatitude: latitude,
+      centerLongitude: longitude,
+    );
 
-    final attractions = await _queryPlaces(attractionQuery);
-    final restaurants = await _queryPlaces(foodQuery);
+    final restaurants = await _queryPlaces(
+      foodQuery,
+      centerLatitude: latitude,
+      centerLongitude: longitude,
+    );
 
-    final unique = <String, _Place>{};
-
-    for (final place in [...attractions, ...restaurants]) {
-      unique.putIfAbsent(place.osmId, () => place);
-    }
-
-    return unique.values.toList();
+    return _filterService.filter<_Place>(
+      places: [...attractions, ...restaurants],
+      getName: (place) => place.name,
+      getId: (place) => place.osmId,
+      getLatitude: (place) => place.latitude,
+      getLongitude: (place) => place.longitude,
+      getCategory: (place) => place.category,
+    );
   }
 
-  Future<List<_Place>> _queryPlaces(String query) async {
+  Future<List<_Place>> _queryPlaces(
+    String query, {
+    required double centerLatitude,
+    required double centerLongitude,
+  }) async {
     for (final server in _servers) {
       try {
         final uri = Uri.https(server, '/api/interpreter');
 
-        final response = await http
-            .post(
-              uri,
-              body: {'data': query},
-              headers: {'User-Agent': _userAgent},
-            )
-            .timeout(const Duration(seconds: 50));
+        final response = await http.post(
+          uri,
+          body: {'data': query},
+          headers: {
+            'User-Agent': _userAgent,
+            'Accept': 'application/json',
+          },
+        ).timeout(const Duration(seconds: 60));
 
-        if (response.statusCode != 200) {
-          continue;
-        }
+        if (response.statusCode != 200) continue;
 
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final elements = data['elements'] as List<dynamic>? ?? [];
+        final decoded = jsonDecode(response.body);
 
+        if (decoded is! Map<String, dynamic>) continue;
+
+        final elements = decoded['elements'] as List<dynamic>? ?? [];
         final places = <_Place>[];
 
         for (final element in elements) {
-          final map = Map<String, dynamic>.from(element as Map);
+          if (element is! Map) continue;
 
-          final tags = Map<String, dynamic>.from(map['tags'] as Map? ?? {});
+          final map = Map<String, dynamic>.from(element);
+          final tags = Map<String, dynamic>.from(
+            map['tags'] as Map? ?? {},
+          );
 
-          final name = tags['name']?.toString().trim() ?? '';
-
+          final name = _getReadableName(tags);
           if (name.isEmpty) continue;
 
-          final center = map['center'] == null
-              ? null
-              : Map<String, dynamic>.from(map['center'] as Map);
+          final center = map['center'] is Map
+              ? Map<String, dynamic>.from(map['center'] as Map)
+              : null;
 
           final lat = map['lat'] ?? center?['lat'];
           final lon = map['lon'] ?? center?['lon'];
 
           if (lat is! num || lon is! num) continue;
 
-          final category = _getCategory(tags);
+          final placeLatitude = lat.toDouble();
+          final placeLongitude = lon.toDouble();
 
+          final distance = _filterService.distanceKm(
+            latitude1: centerLatitude,
+            longitude1: centerLongitude,
+            latitude2: placeLatitude,
+            longitude2: placeLongitude,
+          );
+
+          if (distance > _maxDistanceKm) continue;
+
+          final category = _getCategory(tags);
           if (category == null) continue;
 
           places.add(
@@ -184,16 +499,17 @@ out center tags 40;
               name: name,
               category: category,
               description: _getDescription(category, tags),
-              latitude: lat.toDouble(),
-              longitude: lon.toDouble(),
+              latitude: placeLatitude,
+              longitude: placeLongitude,
               osmId: '${map['type']}/${map['id']}',
               tags: tags,
             ),
           );
         }
 
-        return places;
+        if (places.isNotEmpty) return places;
       } catch (_) {
+        // Sunucu hata verirse sıradaki Overpass sunucusunu dene.
         continue;
       }
     }
@@ -201,128 +517,265 @@ out center tags 40;
     return [];
   }
 
+  // ------------------------------------------------------------
+  // MEKÂN İSİMLERİ
+  // ------------------------------------------------------------
+
+  String _getReadableName(Map<String, dynamic> tags) {
+    final candidates = [
+      tags['name:tr'],
+      tags['name:en'],
+      tags['name:ja-Latn'],
+      tags['name:ja_rm'],
+      tags['int_name'],
+      tags['name:romaji'],
+      tags['official_name:en'],
+      tags['official_name'],
+      tags['name'],
+    ];
+
+    for (final candidate in candidates) {
+      final value = candidate?.toString().trim() ?? '';
+
+      if (value.isEmpty) continue;
+      if (_containsJapaneseCharacters(value)) continue;
+
+      return value;
+    }
+
+    return '';
+  }
+
+  bool _containsJapaneseCharacters(String value) {
+    return RegExp(
+      r'[\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]',
+    ).hasMatch(value);
+  }
+
+  // ------------------------------------------------------------
+  // KATEGORİLER
+  // ------------------------------------------------------------
+
   String? _getCategory(Map<String, dynamic> tags) {
     final tourism = tags['tourism']?.toString();
     final historic = tags['historic']?.toString();
     final amenity = tags['amenity']?.toString();
+    final religion = tags['religion']?.toString();
+    final building = tags['building']?.toString();
     final leisure = tags['leisure']?.toString();
     final natural = tags['natural']?.toString();
     final waterway = tags['waterway']?.toString();
+    final shop = tags['shop']?.toString();
+
+    if (amenity == 'place_of_worship' || building == 'temple') {
+      if (religion == 'shinto') return 'Şinto Mabedi';
+      if (religion == 'buddhist') return 'Budist Tapınağı';
+      return 'İbadethane';
+    }
+
+    if (historic == 'castle') return 'Kale';
+    if (historic == 'monument' || historic == 'memorial') {
+      return 'Anıt';
+    }
+    if (historic == 'archaeological_site') {
+      return 'Arkeolojik Alan';
+    }
+    if (historic == 'ruins') return 'Tarihî Kalıntı';
+    if (historic == 'tomb') return 'Mezar Anıtı';
+
+    if (leisure == 'garden' || tourism == 'garden') {
+      return 'Bahçe';
+    }
+    if (leisure == 'nature_reserve') return 'Doğa Alanı';
+    if (leisure == 'park') return 'Park';
 
     if (tourism == 'museum') return 'Müze';
     if (tourism == 'viewpoint') return 'Manzara';
     if (tourism == 'zoo' || tourism == 'aquarium') {
       return 'Eğlence';
     }
-    if (tourism == 'attraction') return 'Turistik Yer';
+    if (tourism == 'gallery') return 'Sanat Galerisi';
+    if (tourism == 'attraction' || tourism == 'artwork') {
+      return 'Turistik Yer';
+    }
 
-    if (historic != null) return 'Tarihi Yer';
+    if (amenity == 'marketplace' || shop == 'marketplace') {
+      return 'Pazar';
+    }
+    if (shop == 'mall' || shop == 'department_store') {
+      return 'Alışveriş';
+    }
 
-    if (waterway == 'waterfall') return 'Şelale';
+    if (waterway == 'waterfall' || natural == 'waterfall') {
+      return 'Şelale';
+    }
     if (natural == 'beach') return 'Plaj';
 
-    if (leisure == 'park') return 'Park';
+    if (amenity == 'restaurant' || amenity == 'food_court') {
+      return 'Restoran';
+    }
+    if (amenity == 'cafe' || shop == 'bakery') return 'Kafe';
 
-    if (amenity == 'restaurant') return 'Restoran';
-    if (amenity == 'cafe') return 'Kafe';
+    // Diğer tarihî etiketleri genel tarihî yer olarak sınıflandır.
+    if (historic != null) return 'Tarihî Yer';
 
     return null;
   }
 
-  String _getDescription(String category, Map<String, dynamic> tags) {
-    final address = tags['addr:street']?.toString();
+  // ------------------------------------------------------------
+  // TÜRKÇE AÇIKLAMALAR
+  // ------------------------------------------------------------
 
-    final descriptions = {
-      'Müze': 'Kültür ve tarih keşfi için ziyaret edilebilecek bir müze.',
-      'Manzara': 'Manzara izlemek ve fotoğraf çekmek için bir nokta.',
-      'Eğlence': 'Keyifli vakit geçirebileceğin bir aktivite noktası.',
-      'Turistik Yer': 'Destinasyonun turistik keşif noktalarından biri.',
-      'Tarihi Yer': 'Bölgenin tarihi dokusunu keşfedebileceğin bir yer.',
-      'Şelale': 'Doğal güzelliğiyle öne çıkan bir şelale.',
-      'Plaj': 'Deniz ve sahil keyfi için bir durak.',
-      'Park': 'Dinlenmek ve doğayla vakit geçirmek için bir alan.',
-      'Restoran': 'Yemek molası verebileceğin bir restoran.',
-      'Kafe': 'Dinlenmek için kahve molası verebileceğin bir kafe.',
-    };
+  String _getDescription(
+    String category,
+    Map<String, dynamic> tags,
+  ) {
+    final turkishDescription =
+        tags['description:tr']?.toString().trim();
 
-    final description = descriptions[category] ?? 'Keşfedilebilecek bir nokta.';
-
-    if (address != null && address.isNotEmpty) {
-      return '$description Adres: $address';
+    if (turkishDescription != null &&
+        turkishDescription.isNotEmpty) {
+      return turkishDescription;
     }
 
-    return description;
+    const descriptions = <String, String>{
+      'Şinto Mabedi':
+          'Japon Şinto inancına ait geleneksel bir ibadet alanı.',
+      'Budist Tapınağı':
+          'Budist mimarisini ve Japon kültürünü keşfedebileceğin bir tapınak.',
+      'İbadethane':
+          'Bölgenin inanç ve kültür mirasının bir parçası.',
+      'Kale':
+          'Bölgenin savunma tarihini yansıtan tarihî bir yapı.',
+      'Anıt':
+          'Tarihî bir olayı veya kişiyi anmak için yapılmış bir eser.',
+      'Arkeolojik Alan':
+          'Geçmiş uygarlıklardan izler taşıyan arkeolojik bir alan.',
+      'Tarihî Kalıntı':
+          'Geçmiş dönemlerden günümüze ulaşan tarihî kalıntılar.',
+      'Mezar Anıtı':
+          'Tarihî ve kültürel öneme sahip bir anıt mezar.',
+      'Tarihî Yer':
+          'Bölgenin tarihî mirasını yansıtan bir ziyaret noktası.',
+      'Bahçe':
+          'Peyzaj düzenlemesi ve doğal güzelliğiyle öne çıkan bir bahçe.',
+      'Park':
+          'Açık havada dinlenmek ve doğayla vakit geçirmek için bir alan.',
+      'Doğa Alanı':
+          'Doğal yaşamı ve çevreyi keşfedebileceğin bir alan.',
+      'Müze':
+          'Sanat, kültür veya tarih koleksiyonlarını keşfedebileceğin bir müze.',
+      'Manzara':
+          'Çevreyi izlemek ve fotoğraf çekmek için bir seyir noktası.',
+      'Eğlence':
+          'Keyifli vakit geçirmek için ziyaret edilebilecek bir yer.',
+      'Sanat Galerisi':
+          'Sanat eserlerini ve yerel sergileri keşfedebileceğin bir galeri.',
+      'Turistik Yer':
+          'Destinasyonun ziyaret edilebilecek turistik noktalarından biri.',
+      'Pazar':
+          'Yerel ürünleri ve bölgenin günlük yaşamını keşfedebileceğin bir pazar.',
+      'Alışveriş':
+          'Mağazaları ve alışveriş alanlarını keşfedebileceğin bir nokta.',
+      'Şelale':
+          'Doğal su akışı ve çevresindeki manzarayla öne çıkan bir nokta.',
+      'Plaj':
+          'Deniz ve sahil keyfi için ziyaret edilebilecek bir alan.',
+      'Restoran':
+          'Gezi sırasında yemek molası verebileceğin bir restoran.',
+      'Kafe':
+          'Dinlenmek ve mola vermek için uğrayabileceğin bir kafe.',
+    };
+
+    return descriptions[category] ?? 'Ziyaret edilebilecek bir nokta.';
   }
+
+  // ------------------------------------------------------------
+  // GÜNLÜK GEZİ PLANI
+  // ------------------------------------------------------------
 
   List<ItineraryDay> _createDailyItinerary({
     required String destination,
     required List<_Place> places,
     required int dayCount,
     required List<String> styles,
+    required String budget,
   }) {
-    final attractions = places.where((place) => !_isFood(place)).toList();
-
+    final attractions = places.where((p) => !_isFood(p)).toList();
     final food = places.where(_isFood).toList();
 
-    attractions.sort(
-      (a, b) => _styleScore(b, styles).compareTo(_styleScore(a, styles)),
-    );
-
-    // Her gün en fazla dört ana gezi noktası.
-    // Kategori tekrarlarını azaltmak için farklı günlere dengeli dağıt.
-    final dailyPlaces = List.generate(dayCount, (_) => <_Place>[]);
-
-    final categoryCounts = List.generate(dayCount, (_) => <String, int>{});
-
-    for (final place in attractions) {
-      final eligibleDays = <int>[];
-
-      for (var day = 0; day < dayCount; day++) {
-        if (dailyPlaces[day].length < 4) {
-          eligibleDays.add(day);
-        }
-      }
-
-      if (eligibleDays.isEmpty) break;
-
-      eligibleDays.sort((a, b) {
-        final countA = dailyPlaces[a].length;
-        final countB = dailyPlaces[b].length;
-
-        final categoryA = categoryCounts[a][place.category] ?? 0;
-        final categoryB = categoryCounts[b][place.category] ?? 0;
-
-        final scoreA = countA * 10 + categoryA * 5;
-        final scoreB = countB * 10 + categoryB * 5;
-
-        return scoreA.compareTo(scoreB);
-      });
-
-      final selectedDay = eligibleDays.first;
-
-      dailyPlaces[selectedDay].add(place);
-
-      categoryCounts[selectedDay][place.category] =
-          (categoryCounts[selectedDay][place.category] ?? 0) + 1;
+    int scorePlace(_Place place) {
+      return _scoringService.score(
+        category: place.category,
+        tags: place.tags,
+        styles: styles,
+        budget: budget,
+      );
     }
 
-    // Restoran ve kafeleri ana gezi noktalarından ayrı dağıt.
-    // Her gün toplamda en fazla bir yemek durağı.
-    food.sort((a, b) => _foodScore(b).compareTo(_foodScore(a)));
+    final dailyPlaces = _distributionService.distribute<_Place>(
+      places: attractions,
+      dayCount: dayCount,
+      getLatitude: (place) => place.latitude,
+      getLongitude: (place) => place.longitude,
+      getScore: scorePlace,
+      getCategory: (place) => place.category,
+      maxPlacesPerDay: 4,
+    );
 
-    for (var day = 0; day < dayCount; day++) {
-      if (food.isEmpty) break;
+    // Her güne mümkünse bir restoran veya kafe ekle.
+    final usedFoodIds = <String>{};
 
-      if (dailyPlaces[day].isNotEmpty && dailyPlaces[day].length < 5) {
-        dailyPlaces[day].add(food.removeAt(0));
-      }
+    for (var day = 0; day < dailyPlaces.length; day++) {
+      final dayPlaces = dailyPlaces[day];
+
+      if (dayPlaces.isEmpty || food.isEmpty) continue;
+
+      final centerLatitude = _average(
+        dayPlaces.map((p) => p.latitude).toList(),
+      );
+
+      final centerLongitude = _average(
+        dayPlaces.map((p) => p.longitude).toList(),
+      );
+
+      final availableFood = food
+          .where((place) => !usedFoodIds.contains(place.osmId))
+          .toList();
+
+      if (availableFood.isEmpty) continue;
+
+      availableFood.sort((a, b) {
+        final distanceA = _filterService.distanceKm(
+          latitude1: centerLatitude,
+          longitude1: centerLongitude,
+          latitude2: a.latitude,
+          longitude2: a.longitude,
+        );
+
+        final distanceB = _filterService.distanceKm(
+          latitude1: centerLatitude,
+          longitude1: centerLongitude,
+          latitude2: b.latitude,
+          longitude2: b.longitude,
+        );
+
+        return distanceA.compareTo(distanceB);
+      });
+
+      final selectedFood = availableFood.first;
+      dayPlaces.add(selectedFood);
+      usedFoodIds.add(selectedFood.osmId);
     }
 
     final days = <ItineraryDay>[];
 
     for (var day = 0; day < dayCount; day++) {
-      final orderedPlaces = _orderByDistance(dailyPlaces[day]);
+      final dayPlaces = day < dailyPlaces.length
+          ? dailyPlaces[day]
+          : <_Place>[];
 
+      final orderedPlaces = _orderByDistance(dayPlaces);
       final stops = <ItineraryStop>[];
 
       for (var i = 0; i < orderedPlaces.length; i++) {
@@ -354,52 +807,13 @@ out center tags 40;
   }
 
   bool _isFood(_Place place) {
-    return place.category == 'Restoran' || place.category == 'Kafe';
+    return place.category == 'Restoran' ||
+        place.category == 'Kafe';
   }
 
-  int _foodScore(_Place place) {
-    return place.category == 'Restoran' ? 2 : 1;
-  }
-
-  int _styleScore(_Place place, List<String> styles) {
-    final category = place.category.toLowerCase();
-    final tags = place.tags;
-
-    var score = 0;
-
-    for (final style in styles) {
-      final normalized = style.toLowerCase();
-
-      if ((normalized.contains('kültür') || normalized.contains('tarih')) &&
-          (category.contains('tarih') || category.contains('müze'))) {
-        score += 5;
-      }
-
-      if ((normalized.contains('doğa') || normalized.contains('macera')) &&
-          (category.contains('park') ||
-              category.contains('manzara') ||
-              category.contains('şelale') ||
-              category.contains('plaj'))) {
-        score += 5;
-      }
-
-      if ((normalized.contains('gastronomi') || normalized.contains('yemek')) &&
-          _isFood(place)) {
-        score += 5;
-      }
-
-      if (normalized.contains('eğlence') && category.contains('eğlence')) {
-        score += 5;
-      }
-
-      if (normalized.contains('deniz') &&
-          (tags['natural'] == 'beach' || tags['leisure'] == 'beach_resort')) {
-        score += 5;
-      }
-    }
-
-    return score;
-  }
+  // ------------------------------------------------------------
+  // GÜNLÜK ROTA SIRALAMASI
+  // ------------------------------------------------------------
 
   List<_Place> _orderByDistance(List<_Place> places) {
     if (places.length < 2) {
@@ -409,16 +823,20 @@ out center tags 40;
     final remaining = List<_Place>.from(places);
     final ordered = <_Place>[];
 
-    // İlk durak olarak en yüksek öncelikli mekanı seç.
-    remaining.sort((a, b) => _placePriority(b).compareTo(_placePriority(a)));
+    // İlk olarak yüksek öncelikli mekânı seç.
+    remaining.sort(
+      (a, b) => _placePriority(b).compareTo(_placePriority(a)),
+    );
 
     var current = remaining.removeAt(0);
     ordered.add(current);
 
-    // Sonraki durakları mevcut konuma en yakın olacak şekilde seç.
+    // Sonraki durakları mevcut durağa yakınlığa göre sırala.
     while (remaining.isNotEmpty) {
       remaining.sort(
-        (a, b) => _distance(current, a).compareTo(_distance(current, b)),
+        (a, b) => _distance(current, a).compareTo(
+          _distance(current, b),
+        ),
       );
 
       current = remaining.removeAt(0);
@@ -430,46 +848,52 @@ out center tags 40;
 
   int _placePriority(_Place place) {
     switch (place.category) {
-      case 'Tarihi Yer':
+      case 'Şinto Mabedi':
+      case 'Budist Tapınağı':
+      case 'Kale':
+      case 'Anıt':
+      case 'Arkeolojik Alan':
+      case 'Tarihî Yer':
       case 'Müze':
         return 5;
+
+      case 'Bahçe':
+      case 'Doğa Alanı':
       case 'Şelale':
       case 'Plaj':
       case 'Manzara':
       case 'Park':
         return 4;
+
       case 'Turistik Yer':
       case 'Eğlence':
+      case 'Sanat Galerisi':
         return 3;
+
       default:
         return 1;
     }
   }
 
   double _distance(_Place a, _Place b) {
-    const earthRadius = 6371.0;
-
-    final lat1 = _radians(a.latitude);
-    final lat2 = _radians(b.latitude);
-    final deltaLat = _radians(b.latitude - a.latitude);
-    final deltaLon = _radians(b.longitude - a.longitude);
-
-    final value =
-        math.sin(deltaLat / 2) * math.sin(deltaLat / 2) +
-        math.cos(lat1) *
-            math.cos(lat2) *
-            math.sin(deltaLon / 2) *
-            math.sin(deltaLon / 2);
-
-    final distance = 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value));
-
-    return earthRadius * distance;
+    return _filterService.distanceKm(
+      latitude1: a.latitude,
+      longitude1: a.longitude,
+      latitude2: b.latitude,
+      longitude2: b.longitude,
+    );
   }
 
-  double _radians(double degrees) {
-    return degrees * math.pi / 180;
+  double _average(List<double> values) {
+    if (values.isEmpty) return 0;
+
+    return values.reduce((a, b) => a + b) / values.length;
   }
 }
+
+// --------------------------------------------------------------
+// MEKÂN MODELİ
+// --------------------------------------------------------------
 
 class _Place {
   final String name;
