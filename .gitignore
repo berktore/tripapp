@@ -44,5 +44,31 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+
 # Widget Preview related
 .widget_preview/
+
+# Generated files and local data
+/build/
+/.dart_tool/
+*.zip
+live-test.log
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+android/key.properties
+ios/Flutter/ephemeral/
+# Generated files and local data
+/build/
+/.dart_tool/
+*.zip
+live-test.log
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+android/key.properties
+ios/Flutter/ephemeral/

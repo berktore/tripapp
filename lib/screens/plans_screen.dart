@@ -1,11 +1,15 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/trip_plan.dart';
 import '../services/trip_storage.dart';
+import '../services/weather_service.dart';
 import '../theme/app_theme.dart';
+import 'trip_map_screen.dart';
 
 class PlansScreen extends StatefulWidget {
   const PlansScreen({super.key});
@@ -17,6 +21,7 @@ class PlansScreen extends StatefulWidget {
 class _PlansScreenState extends State<PlansScreen> {
   List<TripPlan> trips = [];
   bool loading = true;
+  bool favoritesOnly = false;
 
   @override
   void initState() {
@@ -29,14 +34,25 @@ class _PlansScreenState extends State<PlansScreen> {
       setState(() => loading = true);
     }
 
-    final result = await TripStorage.getTrips();
+    final result = await TripStorage.loadTrips();
 
     if (!mounted) return;
 
     setState(() {
-      trips = result;
+      trips = result.trips;
       loading = false;
     });
+
+    if (result.skipped > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${result.skipped} gezi kaydı okunamadı ve atlandı. '
+            'Diğer planların korunuyor.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> deleteTrip(TripPlan trip) async {
@@ -71,6 +87,33 @@ class _PlansScreenState extends State<PlansScreen> {
         .showSnackBar(const SnackBar(content: Text('Gezi planı silindi.')));
   }
 
+  Future<void> toggleFavorite(TripPlan trip) async {
+    final isFavorite = await TripStorage.toggleFavorite(trip.id);
+
+    if (!mounted) return;
+
+    if (isFavorite == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gezi planı bulunamadı.')),
+      );
+      return;
+    }
+
+    await loadTrips();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isFavorite
+              ? '${trip.destination} favorilere eklendi.'
+              : '${trip.destination} favorilerden çıkarıldı.',
+        ),
+      ),
+    );
+  }
+
   String formatDate(DateTime date) {
     const months = [
       'Ocak',
@@ -92,6 +135,10 @@ class _PlansScreenState extends State<PlansScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final visibleTrips = favoritesOnly
+        ? trips.where((trip) => trip.isFavorite).toList()
+        : trips;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: SafeArea(
@@ -160,6 +207,45 @@ class _PlansScreenState extends State<PlansScreen> {
                           ],
                         ),
                       ),
+                      const SizedBox(height: 15),
+                      Row(
+                        children: [
+                          ChoiceChip(
+                            label: Text('Tümü (${trips.length})'),
+                            selected: !favoritesOnly,
+                            selectedColor: AppTheme.softTeal,
+                            backgroundColor: Colors.white,
+                            labelStyle: TextStyle(
+                              color: !favoritesOnly
+                                  ? AppTheme.navy
+                                  : AppTheme.muted,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                            onSelected: (_) =>
+                                setState(() => favoritesOnly = false),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: Text(
+                              'Favoriler '
+                              '(${trips.where((trip) => trip.isFavorite).length})',
+                            ),
+                            selected: favoritesOnly,
+                            selectedColor: AppTheme.softTeal,
+                            backgroundColor: Colors.white,
+                            labelStyle: TextStyle(
+                              color: favoritesOnly
+                                  ? AppTheme.navy
+                                  : AppTheme.muted,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                            onSelected: (_) =>
+                                setState(() => favoritesOnly = true),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -171,20 +257,25 @@ class _PlansScreenState extends State<PlansScreen> {
                     child: CircularProgressIndicator(color: AppTheme.teal),
                   ),
                 )
-              else if (trips.isEmpty)
-                SliverFillRemaining(hasScrollBody: false, child: _emptyState())
+              else if (visibleTrips.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _emptyState(
+                    favoritesOnly: favoritesOnly && trips.isNotEmpty,
+                  ),
+                )
               else
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(20, 5, 20, 30),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate((context, index) {
-                      final trip = trips[index];
+                      final trip = visibleTrips[index];
 
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 16),
                         child: _tripCard(trip),
                       );
-                    }, childCount: trips.length),
+                    }, childCount: visibleTrips.length),
                   ),
                 ),
             ],
@@ -194,7 +285,7 @@ class _PlansScreenState extends State<PlansScreen> {
     );
   }
 
-  Widget _emptyState() {
+  Widget _emptyState({bool favoritesOnly = false}) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(30),
@@ -208,27 +299,31 @@ class _PlansScreenState extends State<PlansScreen> {
                 color: Color(0xFFE1F3F0),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.map_outlined,
+              child: Icon(
+                favoritesOnly ? Icons.favorite_border : Icons.map_outlined,
                 size: 43,
                 color: AppTheme.teal,
               ),
             ),
             const SizedBox(height: 20),
-            const Text(
-              'Henüz bir gezi planın yok.',
+            Text(
+              favoritesOnly
+                  ? 'Henüz favori gezin yok.'
+                  : 'Henüz bir gezi planın yok.',
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                 color: AppTheme.navy,
                 fontSize: 19,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 9),
-            const Text(
-              'Ana sayfadan ilk yolculuğunu planlamaya başlayabilirsin.',
+            Text(
+              favoritesOnly
+                  ? 'Bir planın kalbindeki simgeye dokunarak favorilere ekle.'
+                  : 'Ana sayfadan ilk yolculuğunu planlamaya başlayabilirsin.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.muted, height: 1.5),
+              style: const TextStyle(color: AppTheme.muted, height: 1.5),
             ),
           ],
         ),
@@ -242,16 +337,18 @@ class _PlansScreenState extends State<PlansScreen> {
       borderRadius: BorderRadius.circular(21),
       child: InkWell(
         borderRadius: BorderRadius.circular(21),
-        onTap: () {
-          Navigator.push(
+        onTap: () async {
+          await Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => TripDetailScreen(trip: trip)),
           );
+
+          if (mounted) await loadTrips();
         },
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(21),
-            border: Border.all(color: const Color(0xFFEAF0EF)),
+            border: Border.all(color: AppTheme.border),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -282,6 +379,20 @@ class _PlansScreenState extends State<PlansScreen> {
                               fontSize: 19,
                               fontWeight: FontWeight.bold,
                             ),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: trip.isFavorite
+                              ? 'Favorilerden çıkar'
+                              : 'Favorilere ekle',
+                          onPressed: () => toggleFavorite(trip),
+                          icon: Icon(
+                            trip.isFavorite
+                                ? Icons.favorite_rounded
+                                : Icons.favorite_border_rounded,
+                            color: trip.isFavorite
+                                ? Colors.redAccent
+                                : AppTheme.muted,
                           ),
                         ),
                         PopupMenuButton<String>(
@@ -315,7 +426,8 @@ class _PlansScreenState extends State<PlansScreen> {
                     const SizedBox(height: 15),
                     _infoRow(
                       Icons.calendar_month_outlined,
-                      '${formatDate(trip.startDate)} - ${formatDate(trip.endDate)}',
+                      '${formatDate(trip.startDate)} - '
+                      '${formatDate(trip.endDate)}',
                     ),
                     const SizedBox(height: 10),
                     _infoRow(Icons.people_outline, trip.travelers),
@@ -389,10 +501,28 @@ class _PlansScreenState extends State<PlansScreen> {
 
 // GEZİ DETAY EKRANI
 
-class TripDetailScreen extends StatelessWidget {
+class TripDetailScreen extends StatefulWidget {
   final TripPlan trip;
 
   const TripDetailScreen({super.key, required this.trip});
+
+  @override
+  State<TripDetailScreen> createState() => _TripDetailScreenState();
+}
+
+class _TripDetailScreenState extends State<TripDetailScreen> {
+  late TripPlan _trip;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _trip = widget.trip;
+  }
+
+  bool get _hasCoordinates => _trip.itinerary.any(
+    (day) => day.stops.any((stop) => stop.hasCoordinates),
+  );
 
   String formatDate(DateTime date) {
     const months = [
@@ -413,26 +543,172 @@ class TripDetailScreen extends StatelessWidget {
     return '${date.day} ${months[date.month - 1]} ${date.year}';
   }
 
+  Future<void> _deleteStop(ItineraryDay day, ItineraryStop stop) async {
+    if (_busy) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Durağı kaldır'),
+        content: Text('${stop.title} planından kaldırılsın mı?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Vazgeç'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Kaldır'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _busy = true);
+
+    final removed = await TripStorage.removeStop(
+      tripId: _trip.id,
+      dayNumber: day.dayNumber,
+      title: stop.title,
+      osmId: stop.osmId,
+    );
+
+    final result = await TripStorage.loadTrips();
+    final updated = result.trips.where((trip) => trip.id == _trip.id).toList();
+
+    if (!mounted) return;
+
+    setState(() {
+      _busy = false;
+      if (updated.isNotEmpty) _trip = updated.first;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          removed
+              ? '${stop.title} plandan kaldırıldı.'
+              : 'Durak kaldırılamadı; plan değişmedi.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleFavorite() async {
+    final isFavorite = await TripStorage.toggleFavorite(_trip.id);
+
+    if (!mounted) return;
+
+    if (isFavorite == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gezi planı bulunamadı.')),
+      );
+      return;
+    }
+
+    setState(() => _trip = _trip.copyWith(isFavorite: isFavorite));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          isFavorite ? 'Favorilere eklendi.' : 'Favorilerden çıkarıldı.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sharePlan() async {
+    final buffer = StringBuffer()
+      ..writeln('${_trip.destination} · ${_trip.duration} günlük gezi planı')
+      ..writeln(
+        '${formatDate(_trip.startDate)} - ${formatDate(_trip.endDate)}',
+      )
+      ..writeln('${_trip.travelers} · ${_trip.budget}')
+      ..writeln();
+
+    for (final day in _trip.itinerary) {
+      buffer.writeln('${day.dayNumber}. Gün');
+      for (final stop in day.stops) {
+        buffer.writeln('${stop.time} · ${stop.title}');
+      }
+      buffer.writeln();
+    }
+
+    buffer.writeln(
+      'TripApp ile planlandı. Mekân verisi: © OpenStreetMap katkıda '
+      'bulunanlar (ODbL).',
+    );
+
+    await Clipboard.setData(ClipboardData(text: buffer.toString()));
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Gezi planı panoya kopyalandı; dilediğin uygulamada paylaşabilirsin.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.background,
-      appBar: AppBar(title: const Text('Gezi detayları')),
+      appBar: AppBar(
+        title: const Text('Gezi detayları'),
+        actions: [
+          IconButton(
+            tooltip: _trip.isFavorite
+                ? 'Favorilerden çıkar'
+                : 'Favorilere ekle',
+            onPressed: _toggleFavorite,
+            icon: Icon(
+              _trip.isFavorite
+                  ? Icons.favorite_rounded
+                  : Icons.favorite_border_rounded,
+              color: _trip.isFavorite ? Colors.redAccent : AppTheme.navy,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Planı paylaş',
+            onPressed: _sharePlan,
+            icon: const Icon(Icons.ios_share_rounded),
+          ),
+          IconButton(
+            tooltip: 'Haritada göster',
+            onPressed: _hasCoordinates
+                ? () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => TripMapScreen(trip: _trip),
+                      ),
+                    );
+                  }
+                : null,
+            icon: const Icon(Icons.map_outlined),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 10, 20, 25),
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(24),
             child: DestinationPhoto(
-              destination: trip.destination,
-              imageUrl: trip.imageUrl,
+              destination: _trip.destination,
+              imageUrl: _trip.imageUrl,
               height: 210,
               width: double.infinity,
             ),
           ),
           const SizedBox(height: 23),
           Text(
-            trip.destination,
+            _trip.destination,
             style: const TextStyle(
               color: AppTheme.navy,
               fontSize: 29,
@@ -441,28 +717,31 @@ class TripDetailScreen extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '${trip.duration} günlük yolculuk',
+            '${_trip.duration} günlük yolculuk',
             style: const TextStyle(color: AppTheme.muted, fontSize: 15),
           ),
           const SizedBox(height: 25),
           _detailCard(
             'Seyahat tarihleri',
-            '${formatDate(trip.startDate)} - ${formatDate(trip.endDate)}',
+            '${formatDate(_trip.startDate)} - ${formatDate(_trip.endDate)}',
             Icons.calendar_month_outlined,
           ),
-          _detailCard('Yolcular', trip.travelers, Icons.people_outline),
+          _detailCard('Yolcular', _trip.travelers, Icons.people_outline),
           _detailCard(
             'Bütçe',
-            trip.budget,
+            _trip.budget,
             Icons.account_balance_wallet_outlined,
           ),
           _detailCard(
             'Tatil tarzı',
-            trip.travelStyles.join(', '),
+            _trip.travelStyles.join(', '),
             Icons.favorite_border,
           ),
+          if (_hasCoordinates) ...[
+            const SizedBox(height: 4),
+            _WeatherSection(trip: _trip),
+          ],
           const SizedBox(height: 15),
-          const SizedBox(height: 8),
           const Text(
             'Günlük gezi programın',
             style: TextStyle(
@@ -472,7 +751,7 @@ class TripDetailScreen extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          if (trip.itinerary.isEmpty)
+          if (_trip.itinerary.isEmpty)
             Container(
               padding: const EdgeInsets.all(17),
               decoration: BoxDecoration(
@@ -486,14 +765,14 @@ class TripDetailScreen extends StatelessWidget {
               ),
             )
           else
-            ...trip.itinerary.map(
+            ..._trip.itinerary.map(
               (day) => Container(
                 margin: const EdgeInsets.only(bottom: 13),
                 padding: const EdgeInsets.all(17),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: const Color(0xFFEAF0EF)),
+                  border: Border.all(color: AppTheme.border),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -504,6 +783,14 @@ class TripDetailScreen extends StatelessWidget {
                         color: AppTheme.navy,
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      formatDate(_trip.dateForDay(day.dayNumber)),
+                      style: const TextStyle(
+                        color: AppTheme.muted,
+                        fontSize: 11,
                       ),
                     ),
                     const SizedBox(height: 13),
@@ -563,7 +850,46 @@ class TripDetailScreen extends StatelessWidget {
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
+                                  if (stop.openingHours != null) ...[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      'Çalışma saatleri: '
+                                      '${stop.openingHours}',
+                                      style: const TextStyle(
+                                        color: AppTheme.muted,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                  ],
+                                  if (stop.needsAttribution) ...[
+                                    const SizedBox(height: 4),
+                                    InkWell(
+                                      onTap: () => launchUrl(
+                                        Uri.parse(stop.sourceUrl!),
+                                        mode: LaunchMode.externalApplication,
+                                      ),
+                                      child: const Text(
+                                        'Kaynak: Wikipedia (CC BY-SA)',
+                                        style: TextStyle(
+                                          color: AppTheme.teal,
+                                          fontSize: 10,
+                                          decoration: TextDecoration.underline,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Durağı kaldır',
+                              onPressed: _busy
+                                  ? null
+                                  : () => _deleteStop(day, stop),
+                              icon: const Icon(
+                                Icons.remove_circle_outline,
+                                size: 20,
+                                color: AppTheme.muted,
                               ),
                             ),
                           ],
@@ -574,6 +900,12 @@ class TripDetailScreen extends StatelessWidget {
                 ),
               ),
             ),
+          const SizedBox(height: 6),
+          const Text(
+            'Mekân verisi: © OpenStreetMap katkıda bulunanlar (ODbL). '
+            'Wikipedia metinleri CC BY-SA lisanslıdır.',
+            style: TextStyle(color: AppTheme.muted, fontSize: 10, height: 1.5),
+          ),
         ],
       ),
     );
@@ -597,7 +929,10 @@ class TripDetailScreen extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(color: AppTheme.muted, fontSize: 12),
+                  style: const TextStyle(
+                    color: AppTheme.muted,
+                    fontSize: 12,
+                  ),
                 ),
                 const SizedBox(height: 5),
                 Text(
@@ -613,6 +948,233 @@ class TripDetailScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// HAVA DURUMU
+
+class _WeatherSection extends StatefulWidget {
+  const _WeatherSection({required this.trip});
+
+  final TripPlan trip;
+
+  @override
+  State<_WeatherSection> createState() => _WeatherSectionState();
+}
+
+class _WeatherSectionState extends State<_WeatherSection> {
+  Future<WeatherResult>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<WeatherResult>? _load() {
+    final center = _centerOf(widget.trip);
+    if (center == null) return null;
+
+    return WeatherService().getForecast(
+      latitude: center.$1,
+      longitude: center.$2,
+      startDate: widget.trip.startDate,
+      endDate: widget.trip.endDate,
+    );
+  }
+
+  (double, double)? _centerOf(TripPlan trip) {
+    if (trip.latitude != null && trip.longitude != null) {
+      return (trip.latitude!, trip.longitude!);
+    }
+
+    for (final day in trip.itinerary) {
+      for (final stop in day.stops) {
+        if (stop.hasCoordinates) {
+          return (stop.latitude!, stop.longitude!);
+        }
+      }
+    }
+
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final future = _future;
+    if (future == null) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(17),
+      ),
+      child: FutureBuilder<WeatherResult>(
+        future: future,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Row(
+              children: [
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                SizedBox(width: 12),
+                Text(
+                  'Hava durumu kontrol ediliyor...',
+                  style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                ),
+              ],
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Hava durumu',
+                  style: TextStyle(
+                    color: AppTheme.navy,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                Text(
+                  snapshot.error.toString(),
+                  style: const TextStyle(
+                    color: AppTheme.muted,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            );
+          }
+
+          final result = snapshot.data;
+          if (result == null) return const SizedBox.shrink();
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(
+                    Icons.wb_sunny_outlined,
+                    color: AppTheme.teal,
+                    size: 21,
+                  ),
+                  SizedBox(width: 9),
+                  Text(
+                    'Hava durumu',
+                    style: TextStyle(
+                      color: AppTheme.navy,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              if (result.note != null) ...[
+                const SizedBox(height: 7),
+                Text(
+                  result.note!,
+                  style: const TextStyle(
+                    color: AppTheme.muted,
+                    fontSize: 11,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+              if (result.hasData) ...[
+                const SizedBox(height: 11),
+                ...result.days.map(
+                  (day) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 52,
+                          child: Text(
+                            _shortDate(day.date),
+                            style: const TextStyle(
+                              color: AppTheme.navy,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          _iconFor(day.code),
+                          size: 18,
+                          color: AppTheme.teal,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            WeatherService.descriptionForCode(day.code),
+                            style: const TextStyle(
+                              color: AppTheme.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${day.minTemperature.round()}° / '
+                          '${day.maxTemperature.round()}°',
+                          style: const TextStyle(
+                            color: AppTheme.navy,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if (day.precipitationProbability != null) ...[
+                          const SizedBox(width: 6),
+                          Text(
+                            '%${day.precipitationProbability}',
+                            style: const TextStyle(
+                              color: AppTheme.teal,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String _shortDate(DateTime date) {
+    const weekdays = [
+      'Pzt',
+      'Sal',
+      'Çar',
+      'Per',
+      'Cum',
+      'Cmt',
+      'Paz',
+    ];
+    return '${weekdays[date.weekday - 1]} ${date.day}.${date.month}';
+  }
+
+  IconData _iconFor(int code) {
+    if (code == 0) return Icons.wb_sunny_rounded;
+    if (code <= 3) return Icons.wb_cloudy_rounded;
+    if (code == 45 || code == 48) return Icons.foggy;
+    if (code >= 51 && code <= 67) return Icons.grain_rounded;
+    if (code >= 71 && code <= 77) return Icons.ac_unit_rounded;
+    if (code >= 80 && code <= 82) return Icons.umbrella_rounded;
+    if (code >= 95) return Icons.thunderstorm_rounded;
+    return Icons.cloud_outlined;
   }
 }
 

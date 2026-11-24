@@ -18,16 +18,28 @@ class PlaceScoringService {
     // Temel turistik değer: Mekânın türüne göre başlangıç puanı.
     const baseScores = <String, int>{
       'tapinak': 14,
-      'sinto mabedi': 14,
-      'japon bahcesi': 13,
+      'budist tapinagi': 15,
+      'sinto mabedi': 16,
+      'ibadethane': 11,
+      'bahce': 13,
+      'dogal alan': 11,
       'tarihi yer': 12,
-      'kale': 12,
+      'tarihi alan': 12,
+      'tarihi kapi': 11,
+      'saray': 13,
+      'kale': 13,
+      'anit': 11,
+      'arkeolojik alan': 13,
+      'tarihi kalinti': 11,
+      'mezar aniti': 11,
       'turistik yer': 11,
+      'gezilecek yer': 10,
       'manzara': 10,
       'park': 9,
       'pazar': 9,
       'muze': 8,
       'eglence': 8,
+      'gece hayati': 8,
       'alisveris': 6,
       'restoran': 5,
       'kafe': 3,
@@ -113,10 +125,11 @@ class PlaceScoringService {
       }
 
       if (_matches(normalizedStyle, ['gece hayati'])) {
-        if (amenity == 'bar' ||
+        if (normalizedCategory == 'gece hayati' ||
+            amenity == 'bar' ||
             amenity == 'pub' ||
             amenity == 'nightclub') {
-          result += 10;
+          result += 18;
         }
       }
 

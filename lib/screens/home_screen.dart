@@ -2,10 +2,16 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../models/trip_plan.dart';
 import '../services/destination_image_service.dart';
+import '../services/place_cache.dart';
+import '../services/trip_storage.dart';
 import 'planner_screen.dart';
 import 'plans_screen.dart';
 import 'destination_detail_screen.dart';
+
+/// Planlayıcıyı, isteğe bağlı bir destinasyon ön seçimiyle açar.
+typedef StartPlanning = void Function({String? destination});
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,11 +24,11 @@ class _HomeScreenState extends State<HomeScreen> {
   int selectedIndex = 0;
   int plansRefreshKey = 0;
 
-  Future<void> openPlanner() async {
+  Future<void> openPlanner({String? destination}) async {
     final result = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => const PlannerScreen(),
+        builder: (_) => PlannerScreen(initialDestination: destination),
       ),
     );
 
@@ -412,7 +418,7 @@ class DestinationTile extends StatelessWidget {
 // ============================================================
 
 class DiscoverScreen extends StatefulWidget {
-  final VoidCallback onPlanTap;
+  final StartPlanning onPlanTap;
 
   const DiscoverScreen({
     super.key,
@@ -588,7 +594,10 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           country: destination.country,
           image: destination.image,
           description: destination.description,
-          onPlanTap: widget.onPlanTap,
+          onPlanTap: () {
+            Navigator.pop(context);
+            widget.onPlanTap(destination: destination.name);
+          },
         ),
       ),
     );
@@ -793,7 +802,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               const SizedBox(height: 12),
 
               GestureDetector(
-                onTap: widget.onPlanTap,
+                onTap: () => widget.onPlanTap(),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(23),
                   child: Stack(
@@ -1142,45 +1151,279 @@ class _DestinationDiscoverImage extends StatelessWidget {
 // PROFİL
 // ============================================================
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  List<TripPlan> _trips = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTrips();
+  }
+
+  Future<void> _loadTrips() async {
+    final result = await TripStorage.loadTrips();
+
+    if (!mounted) return;
+
+    setState(() {
+      _trips = result.trips;
+      _loading = false;
+    });
+  }
+
+  Future<void> _clearCache() async {
+    await PlaceCache.clear();
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Mekân önbelleği temizlendi. Sonraki plan oluşturma daha uzun '
+          'sürebilir.',
+        ),
+      ),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: SingleChildScrollView(
-        padding: EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircleAvatar(
-              radius: 38,
-              backgroundColor: Color(0xFFDDF2EF),
-              child: Icon(
-                Icons.person_outline,
-                size: 42,
-                color: AppTheme.navy,
+    final totalDays = _trips.fold<int>(0, (sum, trip) => sum + trip.duration);
+    final destinations = _trips
+        .map((trip) => trip.destination.trim().toLowerCase())
+        .toSet()
+        .length;
+    final favorites = _trips.where((trip) => trip.isFavorite).length;
+
+    return RefreshIndicator(
+      onRefresh: _loadTrips,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 22, 20, 30),
+        children: [
+          Row(
+            children: [
+              const CircleAvatar(
+                radius: 30,
+                backgroundColor: Color(0xFFDDF2EF),
+                child: Icon(
+                  Icons.person_outline,
+                  size: 32,
+                  color: AppTheme.navy,
+                ),
               ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Profilim',
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        color: AppTheme.navy,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    const Text(
+                      'Hesap gerekmez; verilerin cihazında kalır.',
+                      style: TextStyle(color: AppTheme.muted, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 30),
+              child: Center(
+                child: CircularProgressIndicator(color: AppTheme.teal),
+              ),
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: _statCard(
+                    Icons.luggage_rounded,
+                    '${_trips.length}',
+                    'Gezi',
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _statCard(
+                    Icons.calendar_month_outlined,
+                    '$totalDays',
+                    'Gün',
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _statCard(
+                    Icons.public_rounded,
+                    '$destinations',
+                    'Destinasyon',
+                  ),
+                ),
+              ],
             ),
-            SizedBox(height: 15),
+          if (!_loading && favorites > 0) ...[
+            const SizedBox(height: 8),
             Text(
-              'Profilim',
-              style: TextStyle(
-                fontSize: 25,
-                fontWeight: FontWeight.bold,
-                color: AppTheme.navy,
-              ),
-            ),
-            SizedBox(height: 8),
-            Text(
-              'Profil ayarları yakında burada.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppTheme.muted,
-              ),
+              '$favorites favori gezi',
+              style: const TextStyle(color: AppTheme.muted, fontSize: 11),
             ),
           ],
-        ),
+          const SizedBox(height: 24),
+          _sectionCard(
+            title: 'Veri ve gizlilik',
+            icon: Icons.lock_outline_rounded,
+            children: const [
+              Text(
+                'Kayıtlı planlar yalnızca bu cihazda saklanır. Hesap '
+                'oluşturulmaz, planlar sunucuya gönderilmez.',
+                style: TextStyle(
+                  color: AppTheme.muted,
+                  fontSize: 12,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _sectionCard(
+            title: 'Veri kaynakları',
+            icon: Icons.verified_outlined,
+            children: const [
+              Text(
+                'Mekânlar: OpenStreetMap katkıda bulunanlar (ODbL) ve '
+                'Wikipedia (CC BY-SA).\nHava durumu: Open-Meteo.\n'
+                'Uydurma mekân üretilmez; her durak gerçek bir kaynaktan gelir.',
+                style: TextStyle(
+                  color: AppTheme.muted,
+                  fontSize: 12,
+                  height: 1.55,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _sectionCard(
+            title: 'Planlama nasıl çalışır?',
+            icon: Icons.auto_awesome_outlined,
+            children: [
+              const Text(
+                'Duraklar; seyahat tarzı, bütçe, kategori çeşitliliği, '
+                'coğrafi yakınlık ve çalışma saatlerine göre puanlanır. '
+                'Kurallar açıklanabilir ve cihaz üzerinde çalışır.',
+                style: TextStyle(
+                  color: AppTheme.muted,
+                  fontSize: 12,
+                  height: 1.55,
+                ),
+              ),
+              const SizedBox(height: 12),
+              InkWell(
+                onTap: _clearCache,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    'Mekân önbelleğini temizle',
+                    style: TextStyle(
+                      color: AppTheme.teal,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+          const Center(
+            child: Text(
+              'TripApp 1.0.0',
+              style: TextStyle(color: AppTheme.muted, fontSize: 11),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statCard(IconData icon, String value, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: AppTheme.teal, size: 22),
+          const SizedBox(height: 7),
+          Text(
+            value,
+            style: const TextStyle(
+              color: AppTheme.navy,
+              fontSize: 21,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          Text(
+            label,
+            style: const TextStyle(color: AppTheme.muted, fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionCard({
+    required String title,
+    required IconData icon,
+    required List<Widget> children,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: AppTheme.teal, size: 20),
+              const SizedBox(width: 9),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: AppTheme.navy,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          ...children,
+        ],
       ),
     );
   }

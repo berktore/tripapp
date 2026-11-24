@@ -30,24 +30,8 @@ class TripApp extends StatelessWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
 
-      // Uygulama teması
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppTheme.navy,
-          primary: AppTheme.navy,
-          secondary: AppTheme.teal,
-          surface: Colors.white,
-        ),
-        scaffoldBackgroundColor: AppTheme.background,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: AppTheme.background,
-          foregroundColor: AppTheme.navy,
-          elevation: 0,
-          centerTitle: false,
-        ),
-        fontFamily: 'Inter',
-      ),
+      // Marka teması: renkler + Inter/Plus Jakarta Sans tipografi
+      theme: AppTheme.light,
 
       // Açılış ekranı
       home: const HomeScreen(),

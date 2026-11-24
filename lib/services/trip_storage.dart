@@ -1,31 +1,63 @@
-
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/app_exception.dart';
+import '../core/log.dart';
 import '../models/trip_plan.dart';
+
+class TripLoadResult {
+  const TripLoadResult({required this.trips, this.skipped = 0});
+
+  final List<TripPlan> trips;
+  final int skipped;
+}
 
 class TripStorage {
   static const String _storageKey = 'tripapp_saved_trips';
 
-  static Future<List<TripPlan>> getTrips() async {
+  /// Her kaydı ayrı ayrı çözer. Bozuk bir kayıt diğerlerini silmez;
+  /// kaç kaydın okunamadığı [TripLoadResult.skipped] ile bildirilir.
+  static Future<TripLoadResult> loadTrips() async {
     final prefs = await SharedPreferences.getInstance();
     final data = prefs.getString(_storageKey);
 
-    if (data == null || data.isEmpty) return [];
-
-    try {
-      final decoded = jsonDecode(data) as List<dynamic>;
-      return decoded
-          .map(
-            (item) => TripPlan.fromJson(
-              Map<String, dynamic>.from(item as Map),
-            ),
-          )
-          .toList();
-    } catch (_) {
-      return [];
+    if (data == null || data.isEmpty) {
+      return const TripLoadResult(trips: []);
     }
+
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(data);
+    } catch (error) {
+      logDebug('Kayıtlı geziler çözümlenemedi', error: error);
+      return const TripLoadResult(trips: [], skipped: 1);
+    }
+
+    if (decoded is! List) {
+      return const TripLoadResult(trips: [], skipped: 1);
+    }
+
+    final trips = <TripPlan>[];
+    var skipped = 0;
+
+    for (final item in decoded) {
+      try {
+        trips.add(
+          TripPlan.fromJson(Map<String, dynamic>.from(item as Map)),
+        );
+      } catch (error) {
+        skipped++;
+        logDebug('Bir gezi kaydı okunamadı', error: error);
+      }
+    }
+
+    return TripLoadResult(trips: trips, skipped: skipped);
+  }
+
+  static Future<List<TripPlan>> getTrips() async {
+    final result = await loadTrips();
+    return List<TripPlan>.of(result.trips);
   }
 
   static Future<void> _writeTrips(List<TripPlan> trips) async {
@@ -37,7 +69,10 @@ class TripStorage {
     );
 
     if (!success) {
-      throw Exception('Gezi planı cihaz hafızasına kaydedilemedi.');
+      throw const AppException(
+        'Gezi planı cihaz hafızasına kaydedilemedi.',
+        kind: AppErrorKind.storage,
+      );
     }
   }
 
@@ -50,8 +85,8 @@ class TripStorage {
     await _writeTrips(trips);
   }
 
-  /// Adds a place to the first saved trip matching [destination].
-  /// Returns false if no matching trip exists or the place is already saved.
+  /// [destination] ile eşleşen ilk kayıtlı gezinin ilk gününe mekân ekler.
+  /// Aynı mekân zaten ekliyse veya eşleşen gezi yoksa `false` döner.
   static Future<bool> addStopToDestination({
     required String destination,
     required ItineraryStop stop,
@@ -69,13 +104,7 @@ class TripStorage {
     final days = List<ItineraryDay>.from(trip.itinerary);
 
     final alreadyExists = days.any(
-      (day) => day.stops.any(
-        (existing) =>
-            existing.osmId != null &&
-            stop.osmId != null &&
-            existing.osmId == stop.osmId ||
-            _normalize(existing.title) == _normalize(stop.title),
-      ),
+      (day) => day.stops.any((existing) => _isSameStop(existing, stop)),
     );
 
     if (alreadyExists) return false;
@@ -91,28 +120,81 @@ class TripStorage {
     } else {
       final firstDay = days.first;
 
-      days[0] = ItineraryDay(
-        dayNumber: firstDay.dayNumber,
-        title: firstDay.title,
-        stops: [...firstDay.stops, stop],
-      );
+      days[0] = firstDay.copyWith(stops: [...firstDay.stops, stop]);
     }
 
-    trips[tripIndex] = TripPlan(
-      id: trip.id,
-      destination: trip.destination,
-      imageUrl: trip.imageUrl,
-      startDate: trip.startDate,
-      endDate: trip.endDate,
-      travelers: trip.travelers,
-      budget: trip.budget,
-      travelStyles: trip.travelStyles,
-      createdAt: trip.createdAt,
-      itinerary: days,
-    );
+    trips[tripIndex] = trip.copyWith(itinerary: days);
 
     await _writeTrips(trips);
     return true;
+  }
+
+  /// Favori durumunu değiştirir ve yeni değeri döndürür.
+  /// Gezi bulunamazsa `null` döner.
+  static Future<bool?> toggleFavorite(String tripId) async {
+    final trips = await getTrips();
+    final index = trips.indexWhere((trip) => trip.id == tripId);
+
+    if (index == -1) return null;
+
+    final updated = trips[index].copyWith(
+      isFavorite: !trips[index].isFavorite,
+    );
+    trips[index] = updated;
+
+    await _writeTrips(trips);
+    return updated.isFavorite;
+  }
+
+  /// Belirtilen günden bir durağı kaldırır.
+  static Future<bool> removeStop({
+    required String tripId,
+    required int dayNumber,
+    required String title,
+    String? osmId,
+  }) async {
+    final trips = await getTrips();
+    final index = trips.indexWhere((trip) => trip.id == tripId);
+    if (index == -1) return false;
+
+    final trip = trips[index];
+    var removed = false;
+
+    final itinerary = trip.itinerary.map((day) {
+      if (day.dayNumber != dayNumber) return day;
+
+      final stops = day.stops.where((stop) {
+        final matches = _sameStopData(stop, title, osmId);
+        if (matches) removed = true;
+        return !matches;
+      }).toList();
+
+      return day.copyWith(stops: stops);
+    }).toList();
+
+    if (!removed) return false;
+
+    trips[index] = trip.copyWith(itinerary: itinerary);
+    await _writeTrips(trips);
+    return true;
+  }
+
+  static bool _isSameStop(ItineraryStop a, ItineraryStop b) {
+    if (a.osmId != null && b.osmId != null && a.osmId == b.osmId) {
+      return true;
+    }
+    return _normalize(a.title) == _normalize(b.title);
+  }
+
+  static bool _sameStopData(
+    ItineraryStop stop,
+    String title,
+    String? osmId,
+  ) {
+    if (osmId != null && stop.osmId != null && stop.osmId == osmId) {
+      return true;
+    }
+    return _normalize(stop.title) == _normalize(title);
   }
 
   static String _normalize(String value) {

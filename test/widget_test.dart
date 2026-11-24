@@ -1,30 +1,48 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tripapp/screens/planner_screen.dart';
 
-import 'package:tripapp/main.dart';
+Future<void> _scrollTo(WidgetTester tester, Finder finder) async {
+  await tester.dragUntilVisible(
+    finder,
+    find.byType(ListView).first,
+    const Offset(0, -250),
+  );
+  await tester.pump();
+}
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const TripApp());
+  testWidgets('planlayıcı ekranı temel bölümleri gösterir', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: PlannerScreen()));
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('Gezi planla'), findsOneWidget);
+    expect(find.text('Nereye gitmek istiyorsun?'), findsOneWidget);
+    expect(find.byType(TextField), findsOneWidget);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    await _scrollTo(tester, find.text('Ne zaman seyahat edeceksin?'));
+
+    expect(find.text('Ne zaman seyahat edeceksin?'), findsOneWidget);
+  });
+
+  testWidgets('ön seçili destinasyon alanı doldurur', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: PlannerScreen(initialDestination: 'Kyoto')),
+    );
+
+    expect(find.textContaining('seçildi'), findsOneWidget);
+  });
+
+  testWidgets('destinasyon seçmeden plan oluşturma uyarı verir', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: PlannerScreen()));
+
+    final button = find.text('Gezi planımı oluştur');
+    await _scrollTo(tester, button);
+    await tester.tap(button);
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(
+      find.text('Önce gitmek istediğin destinasyonu seç.'),
+      findsOneWidget,
+    );
   });
 }

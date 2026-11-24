@@ -6,6 +6,13 @@ class ItineraryStop {
   final double? latitude;
   final double? longitude;
   final String? osmId;
+  final String? openingHours;
+
+  /// Verinin kaynağı (`OpenStreetMap`, `Wikipedia`). Eski kayıtlarda null.
+  final String? source;
+
+  /// Atıf bağlantısı.
+  final String? sourceUrl;
 
   const ItineraryStop({
     required this.time,
@@ -15,7 +22,14 @@ class ItineraryStop {
     this.latitude,
     this.longitude,
     this.osmId,
+    this.openingHours,
+    this.source,
+    this.sourceUrl,
   });
+
+  bool get hasCoordinates => latitude != null && longitude != null;
+
+  bool get needsAttribution => source == 'Wikipedia' && sourceUrl != null;
 
   Map<String, dynamic> toJson() => {
     'time': time,
@@ -25,6 +39,9 @@ class ItineraryStop {
     'latitude': latitude,
     'longitude': longitude,
     'osmId': osmId,
+    'openingHours': openingHours,
+    'source': source,
+    'sourceUrl': sourceUrl,
   };
 
   factory ItineraryStop.fromJson(Map<String, dynamic> json) => ItineraryStop(
@@ -35,6 +52,9 @@ class ItineraryStop {
     latitude: (json['latitude'] as num?)?.toDouble(),
     longitude: (json['longitude'] as num?)?.toDouble(),
     osmId: json['osmId'] as String?,
+    openingHours: json['openingHours'] as String?,
+    source: json['source'] as String?,
+    sourceUrl: json['sourceUrl'] as String?,
   );
 }
 
@@ -48,6 +68,18 @@ class ItineraryDay {
     required this.title,
     required this.stops,
   });
+
+  ItineraryDay copyWith({
+    int? dayNumber,
+    String? title,
+    List<ItineraryStop>? stops,
+  }) {
+    return ItineraryDay(
+      dayNumber: dayNumber ?? this.dayNumber,
+      title: title ?? this.title,
+      stops: stops ?? this.stops,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'dayNumber': dayNumber,
@@ -78,6 +110,9 @@ class TripPlan {
   final List<String> travelStyles;
   final DateTime createdAt;
   final List<ItineraryDay> itinerary;
+  final double? latitude;
+  final double? longitude;
+  final bool isFavorite;
 
   const TripPlan({
     required this.id,
@@ -90,9 +125,47 @@ class TripPlan {
     required this.travelStyles,
     required this.createdAt,
     this.itinerary = const [],
+    this.latitude,
+    this.longitude,
+    this.isFavorite = false,
   });
 
   int get duration => endDate.difference(startDate).inDays + 1;
+
+  bool get hasCoordinates => latitude != null && longitude != null;
+
+  DateTime dateForDay(int dayNumber) =>
+      startDate.add(Duration(days: dayNumber - 1));
+
+  TripPlan copyWith({
+    String? destination,
+    String? imageUrl,
+    DateTime? startDate,
+    DateTime? endDate,
+    String? travelers,
+    String? budget,
+    List<String>? travelStyles,
+    List<ItineraryDay>? itinerary,
+    double? latitude,
+    double? longitude,
+    bool? isFavorite,
+  }) {
+    return TripPlan(
+      id: id,
+      destination: destination ?? this.destination,
+      imageUrl: imageUrl ?? this.imageUrl,
+      startDate: startDate ?? this.startDate,
+      endDate: endDate ?? this.endDate,
+      travelers: travelers ?? this.travelers,
+      budget: budget ?? this.budget,
+      travelStyles: travelStyles ?? this.travelStyles,
+      createdAt: createdAt,
+      itinerary: itinerary ?? this.itinerary,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      isFavorite: isFavorite ?? this.isFavorite,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -105,6 +178,9 @@ class TripPlan {
     'travelStyles': travelStyles,
     'createdAt': createdAt.toIso8601String(),
     'itinerary': itinerary.map((day) => day.toJson()).toList(),
+    'latitude': latitude,
+    'longitude': longitude,
+    'isFavorite': isFavorite,
   };
 
   factory TripPlan.fromJson(Map<String, dynamic> json) {
@@ -125,6 +201,9 @@ class TripPlan {
                 ItineraryDay.fromJson(Map<String, dynamic>.from(item as Map)),
           )
           .toList(),
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
+      isFavorite: json['isFavorite'] == true,
     );
   }
 }

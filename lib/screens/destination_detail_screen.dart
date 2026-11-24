@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
+
 class DestinationDetailScreen extends StatelessWidget {
   final String name;
   final String country;
@@ -19,13 +21,13 @@ class DestinationDetailScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FC),
+      backgroundColor: AppTheme.background,
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
             expandedHeight: 320,
             pinned: true,
-            backgroundColor: const Color(0xFF142B4A),
+            backgroundColor: AppTheme.navy,
             foregroundColor: Colors.white,
             flexibleSpace: FlexibleSpaceBar(
               title: Text(
@@ -38,18 +40,28 @@ class DestinationDetailScreen extends StatelessWidget {
               background: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Image.network(
-                    image,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      color: const Color(0xFF233D5B),
-                      child: const Icon(
+                  if (image.isEmpty)
+                    const ColoredBox(
+                      color: AppTheme.navy,
+                      child: Icon(
                         Icons.landscape,
-                        color: Colors.white,
+                        color: AppTheme.softTeal,
                         size: 80,
                       ),
+                    )
+                  else
+                    Image.network(
+                      image,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const ColoredBox(
+                        color: AppTheme.navy,
+                        child: Icon(
+                          Icons.landscape,
+                          color: AppTheme.softTeal,
+                          size: 80,
+                        ),
+                      ),
                     ),
-                  ),
                   const DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
@@ -70,7 +82,7 @@ class DestinationDetailScreen extends StatelessWidget {
                 Text(
                   country,
                   style: const TextStyle(
-                    color: Color(0xFF64748B),
+                    color: AppTheme.muted,
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
@@ -81,7 +93,7 @@ class DestinationDetailScreen extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 25,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF142B4A),
+                    color: AppTheme.navy,
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -90,7 +102,7 @@ class DestinationDetailScreen extends StatelessWidget {
                   style: const TextStyle(
                     fontSize: 16,
                     height: 1.7,
-                    color: Color(0xFF475569),
+                    color: AppTheme.muted,
                   ),
                 ),
                 const SizedBox(height: 30),
@@ -99,7 +111,7 @@ class DestinationDetailScreen extends StatelessWidget {
                   child: ElevatedButton(
                     onPressed: onPlanTap,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF315EFB),
+                      backgroundColor: AppTheme.teal,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),

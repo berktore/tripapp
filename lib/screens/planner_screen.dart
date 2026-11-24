@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
+import '../core/app_exception.dart';
+import '../models/destination_ref.dart';
 import '../models/trip_plan.dart';
 import '../services/trip_storage.dart';
 import '../services/destination_image_service.dart';
@@ -27,7 +29,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
   Timer? debounce;
 
-  String? selectedPlace;
+  _DestinationChoice? selectedPlace;
   String budget = 'Orta';
   String travelers = '2 kişi';
 
@@ -37,8 +39,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
   bool loading = false;
   bool showSuggestions = true;
+  bool searchFailed = false;
 
-  List<Map<String, String>> suggestions = [];
+  List<_DestinationChoice> suggestions = [];
 
   final List<String> travelStyles = [
     'Deniz',
@@ -51,43 +54,49 @@ class _PlannerScreenState extends State<PlannerScreen> {
     'Dinlenme',
   ];
 
-  final List<Map<String, String>> popularPlaces = [
-    {
-      'name': 'Kapadokya',
-      'country': 'Türkiye',
-      'image':
+  final List<_DestinationChoice> popularPlaces = const [
+    _DestinationChoice(
+      name: 'Kapadokya',
+      country: 'Türkiye',
+      countryCode: 'tr',
+      image:
           'https://images.unsplash.com/photo-1570939274717-7eda259b50ed?w=600',
-    },
-    {
-      'name': 'Santorini',
-      'country': 'Yunanistan',
-      'image':
+    ),
+    _DestinationChoice(
+      name: 'Santorini',
+      country: 'Yunanistan',
+      countryCode: 'gr',
+      image:
           'https://images.unsplash.com/photo-1533105079780-92b9be482077?w=600',
-    },
-    {
-      'name': 'Roma',
-      'country': 'İtalya',
-      'image':
+    ),
+    _DestinationChoice(
+      name: 'Roma',
+      country: 'İtalya',
+      countryCode: 'it',
+      image:
           'https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=600',
-    },
-    {
-      'name': 'Kyoto',
-      'country': 'Japonya',
-      'image':
+    ),
+    _DestinationChoice(
+      name: 'Kyoto',
+      country: 'Japonya',
+      countryCode: 'jp',
+      image:
           'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?w=600',
-    },
-    {
-      'name': 'Paris',
-      'country': 'Fransa',
-      'image':
+    ),
+    _DestinationChoice(
+      name: 'Paris',
+      country: 'Fransa',
+      countryCode: 'fr',
+      image:
           'https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=600',
-    },
-    {
-      'name': 'Bali',
-      'country': 'Endonezya',
-      'image':
+    ),
+    _DestinationChoice(
+      name: 'Bali',
+      country: 'Endonezya',
+      countryCode: 'id',
+      image:
           'https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=600',
-    },
+    ),
   ];
 
   @override
@@ -98,7 +107,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
     final initialDestination = widget.initialDestination?.trim();
 
     if (initialDestination != null && initialDestination.isNotEmpty) {
-      selectedPlace = initialDestination;
+      selectedPlace = _DestinationChoice(name: initialDestination);
       destinationController.text = initialDestination;
       showSuggestions = false;
     }
@@ -162,21 +171,19 @@ class _PlannerScreenState extends State<PlannerScreen> {
       final places = results
           .map((item) {
             final place = item as Map<String, dynamic>;
+            final country = [place['admin1'], place['country']]
+                .where((value) => value != null && value.toString().isNotEmpty)
+                .join(', ');
 
-            return {
-              'name': place['name']?.toString() ?? '',
-              'country': [
-                place['admin1'],
-                place['country'],
-              ]
-                  .where(
-                    (e) => e != null && e.toString().isNotEmpty,
-                  )
-                  .join(', '),
-              'image': '',
-            };
+            return _DestinationChoice(
+              name: place['name']?.toString() ?? '',
+              country: country.isEmpty ? null : country,
+              countryCode: place['country_code']?.toString(),
+              latitude: (place['latitude'] as num?)?.toDouble(),
+              longitude: (place['longitude'] as num?)?.toDouble(),
+            );
           })
-          .where((place) => place['name']!.isNotEmpty)
+          .where((place) => place.name.isNotEmpty)
           .toList();
 
       if (!mounted || destinationController.text.trim() != query) {
@@ -185,6 +192,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
       setState(() {
         suggestions = places;
+        searchFailed = false;
         loading = false;
       });
     } catch (_) {
@@ -194,20 +202,19 @@ class _PlannerScreenState extends State<PlannerScreen> {
 
       setState(() {
         suggestions = popularPlaces.where((place) {
-          return place['name']!
-              .toLowerCase()
-              .contains(query.toLowerCase());
+          return place.name.toLowerCase().contains(query.toLowerCase());
         }).toList();
 
+        searchFailed = true;
         loading = false;
       });
     }
   }
 
-  void choosePlace(Map<String, String> place) {
+  void choosePlace(_DestinationChoice place) {
     setState(() {
-      selectedPlace = place['name'];
-      destinationController.text = place['name']!;
+      selectedPlace = place;
+      destinationController.text = place.name;
       showSuggestions = false;
     });
 
@@ -339,7 +346,9 @@ class _PlannerScreenState extends State<PlannerScreen> {
   Future<void> createPlan() async {
     if (loading) return;
 
-    if (selectedPlace == null) {
+    final place = selectedPlace;
+
+    if (place == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Önce gitmek istediğin destinasyonu seç.'),
@@ -366,31 +375,49 @@ class _PlannerScreenState extends State<PlannerScreen> {
       return;
     }
 
+    if (tripDays < 1 || tripDays > 30) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Gezi süresi 1 ile 30 gün arasında olmalıdır.',
+          ),
+        ),
+      );
+      return;
+    }
+
     setState(() => loading = true);
 
     try {
       final now = DateTime.now();
-
-      final imageUrl = await DestinationImageService.getImageUrl(
-        selectedPlace!,
+      final destination = DestinationRef(
+        name: place.name,
+        country: place.country,
+        countryCode: place.countryCode,
+        latitude: place.latitude,
+        longitude: place.longitude,
       );
 
+      final imageUrl = await DestinationImageService.getImageUrl(place.name);
+
       final itinerary = await DestinationPlacesService().buildItinerary(
-        destination: selectedPlace!,
-        dayCount: travelDates!.end.difference(travelDates!.start).inDays + 1,
+        destination: destination,
+        dayCount: tripDays,
         styles: selectedStyles.toList(),
         budget: budget,
+        startDate: travelDates!.start,
       );
 
       if (itinerary.every((day) => day.stops.isEmpty)) {
-        throw Exception(
+        throw const AppException(
           'Bu destinasyon için yeterli gezi noktası bulunamadı.',
+          kind: AppErrorKind.noPlaces,
         );
       }
 
       final trip = TripPlan(
         id: now.microsecondsSinceEpoch.toString(),
-        destination: selectedPlace!,
+        destination: place.name,
         imageUrl: imageUrl,
         startDate: travelDates!.start,
         endDate: travelDates!.end,
@@ -399,6 +426,8 @@ class _PlannerScreenState extends State<PlannerScreen> {
         travelStyles: selectedStyles.toList(),
         createdAt: now,
         itinerary: itinerary,
+        latitude: place.latitude,
+        longitude: place.longitude,
       );
 
       await TripStorage.saveTrip(trip);
@@ -446,13 +475,50 @@ class _PlannerScreenState extends State<PlannerScreen> {
       if (!mounted) return;
 
       setState(() => loading = false);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Gezi kaydedilemedi: $error'),
-        ),
-      );
+      _showError(error);
     }
+  }
+
+  void _showError(Object error) {
+    final appError = error is AppException ? error : null;
+    final message = appError?.message ??
+        'Gezi planı oluşturulamadı. Lütfen tekrar dene.';
+    final details = appError?.details ??
+        (error is AppException ? null : error.toString());
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(22),
+        ),
+        title: const Text('Plan oluşturulamadı'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(message, style: const TextStyle(height: 1.5)),
+            if (details != null && details.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                details,
+                style: const TextStyle(
+                  color: AppTheme.muted,
+                  fontSize: 11,
+                  height: 1.4,
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Tamam'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -557,7 +623,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                         const SizedBox(width: 9),
                         Expanded(
                           child: Text(
-                            '$selectedPlace seçildi',
+                            '${selectedPlace!.name} seçildi',
                             style: const TextStyle(
                               color: AppTheme.navy,
                               fontWeight: FontWeight.bold,
@@ -593,6 +659,19 @@ class _PlannerScreenState extends State<PlannerScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  if (searchFailed && destinationController.text.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Şehir araması şu anda yanıt vermedi; aşağıdaki '
+                        'öneriler yedek listeden geliyor.',
+                        style: TextStyle(
+                          color: AppTheme.muted,
+                          fontSize: 11,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
                   if (destinationController.text.isEmpty)
                     SizedBox(
                       height: 190,
@@ -613,18 +692,28 @@ class _PlannerScreenState extends State<PlannerScreen> {
                                 child: Stack(
                                   fit: StackFit.expand,
                                   children: [
-                                    Image.network(
-                                      place['image']!,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, _, _) => Container(
+                                    if (place.image.isEmpty)
+                                      Container(
                                         color: AppTheme.navy,
                                         child: const Icon(
                                           Icons.landscape,
                                           color: Colors.white,
                                           size: 35,
                                         ),
+                                      )
+                                    else
+                                      Image.network(
+                                        place.image,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) => Container(
+                                          color: AppTheme.navy,
+                                          child: const Icon(
+                                            Icons.landscape,
+                                            color: Colors.white,
+                                            size: 35,
+                                          ),
+                                        ),
                                       ),
-                                    ),
                                     const DecoratedBox(
                                       decoration: BoxDecoration(
                                         gradient: LinearGradient(
@@ -646,7 +735,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                                             CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            place['name']!,
+                                            place.name,
                                             style: const TextStyle(
                                               color: Colors.white,
                                               fontSize: 16,
@@ -654,7 +743,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                                             ),
                                           ),
                                           Text(
-                                            place['country']!,
+                                            place.country ?? '',
                                             style: const TextStyle(
                                               color: Colors.white70,
                                               fontSize: 11,
@@ -681,33 +770,39 @@ class _PlannerScreenState extends State<PlannerScreen> {
                     )
                   else
                     ...suggestions.map((place) {
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: Container(
-                          width: 42,
-                          height: 42,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE1F3F0),
-                            borderRadius: BorderRadius.circular(12),
+                      // Bu liste, beyaz arka planlı [sectionCard] içinde
+                      // gösteriliyor. Ink efektinin görünmesi için ListTile'a
+                      // kendi Material yüzeyini veriyoruz.
+                      return Material(
+                        color: Colors.transparent,
+                        child: ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE1F3F0),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.location_on_outlined,
+                              color: AppTheme.navy,
+                            ),
                           ),
-                          child: const Icon(
-                            Icons.location_on_outlined,
-                            color: AppTheme.navy,
+                          title: Text(
+                            place.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.navy,
+                            ),
                           ),
-                        ),
-                        title: Text(
-                          place['name']!,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.navy,
+                          subtitle: Text(place.country ?? ''),
+                          trailing: const Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            size: 15,
                           ),
+                          onTap: () => choosePlace(place),
                         ),
-                        subtitle: Text(place['country']!),
-                        trailing: const Icon(
-                          Icons.arrow_forward_ios_rounded,
-                          size: 15,
-                        ),
-                        onTap: () => choosePlace(place),
                       );
                     }),
                 ],
@@ -912,7 +1007,7 @@ class _PlannerScreenState extends State<PlannerScreen> {
                   const SizedBox(width: 10),
                   Text(
                     loading
-                        ? 'Gerçek gezi noktaları bulunuyor...'
+                        ? 'Rotan sana göre hazırlanıyor...'
                         : 'Gezi planımı oluştur',
                     style: const TextStyle(
                       fontSize: 16,
@@ -930,6 +1025,21 @@ class _PlannerScreenState extends State<PlannerScreen> {
           ),
 
           const SizedBox(height: 13),
+          if (loading) ...[
+            const Center(
+              child: Text(
+                'Gerçek mekânlar kontrol ediliyor. Sonraki planlar '
+                'kaydedilen verilerle daha hızlı hazırlanır.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppTheme.muted,
+                  fontSize: 11,
+                  height: 1.5,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           const Center(
             child: Text(
               'Seyahatini birlikte güzelleştirelim.',
@@ -943,4 +1053,26 @@ class _PlannerScreenState extends State<PlannerScreen> {
       ),
     );
   }
+}
+
+/// Arama sonucu veya popüler destinasyon seçeneği.
+///
+/// Koordinatlar Open-Meteo geocoding yanıtından gelir; böylece planlama
+/// sırasında aynı şehir için ikinci bir coğrafi arama yapılmaz.
+class _DestinationChoice {
+  const _DestinationChoice({
+    required this.name,
+    this.country,
+    this.countryCode,
+    this.latitude,
+    this.longitude,
+    this.image = '',
+  });
+
+  final String name;
+  final String? country;
+  final String? countryCode;
+  final double? latitude;
+  final double? longitude;
+  final String image;
 }
